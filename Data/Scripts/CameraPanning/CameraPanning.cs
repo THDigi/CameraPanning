@@ -360,7 +360,6 @@ namespace Digi.CameraPanning
             {
                 positionOffset = Vector3.TransformNormal((Vector3)mount.Normal, originalMatrix) * ((block.CubeGrid.GridSize / 2) + 0.05f);
                 rotatedMatrix.Translation = originalMatrix.Translation + positionOffset;
-                Entity.SetLocalMatrix(rotatedMatrix);
             }
         }
 
