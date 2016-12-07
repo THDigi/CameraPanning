@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Definitions;
 using Sandbox.Game;
@@ -24,9 +25,38 @@ namespace Digi.CameraPanning
         private float originalCameraFovSmall = 0;
         private float originalCameraFovLarge = 0;
 
-        private static readonly float CAMERA_FOV = MathHelper.ToRadians(100);
-        private static readonly MyDefinitionId CAMERA_SMALL_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "SmallCameraBlock");
-        private static readonly MyDefinitionId CAMERA_LARGE_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "LargeCameraBlock");
+        public static List<CameraBlock> updateCameras = new List<CameraBlock>();
+
+        public static readonly float CAMERA_FOV = MathHelper.ToRadians(100);
+        public static readonly MyDefinitionId CAMERA_SMALL_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "SmallCameraBlock");
+        public static readonly MyDefinitionId CAMERA_LARGE_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "LargeCameraBlock");
+
+        public override void HandleInput()
+        {
+            try
+            {
+                if(!init || updateCameras.Count == 0)
+                    return;
+
+                for(int i = updateCameras.Count - 1; i >= 0; i--)
+                {
+                    var camLogic = updateCameras[i];
+
+                    if(camLogic.Entity == null || camLogic.Entity.MarkedForClose || camLogic.Entity.Closed)
+                    {
+                        updateCameras.RemoveAt(i);
+                        continue;
+                    }
+
+                    camLogic.UpdateCamera();
+                }
+            }
+            catch(Exception e)
+            {
+                MyAPIGateway.Utilities.ShowNotification("Error in " + GetType().Name + " - see SpaceEngineers.log", 5000, MyFontEnum.Red);
+                MyLog.Default.WriteLineAndConsole(e.Message + "\n" + e.StackTrace);
+            }
+        }
 
         public override void UpdateAfterSimulation()
         {
@@ -92,6 +122,8 @@ namespace Digi.CameraPanning
                 MyAPIGateway.Utilities.ShowNotification("Error in " + GetType().Name + " - see SpaceEngineers.log", 5000, MyFontEnum.Red);
                 MyLog.Default.WriteLineAndConsole(e.Message + "\n" + e.StackTrace);
             }
+
+            updateCameras.Clear();
         }
 
         private MyCameraBlockDefinition GetCameraDefinition(MyDefinitionId defId)
@@ -117,19 +149,54 @@ namespace Digi.CameraPanning
         private float currentPitch = 0;
         private float currentYaw = 0;
         private float currentRoll = 0;
-        private MyEntity3DSoundEmitter soundEmitter = null;
+        private float currentSpeed = 0;
+        private float prevFOV = 0;
+        private byte soundRotateStopDelay = 0;
+        private byte soundZoomStopDelay = 0;
+        private MyEntity3DSoundEmitter soundEmitterRotate = null;
+        private MyEntity3DSoundEmitter soundEmitterZoom = null;
 
         private static IMyHudNotification notification = null;
         private static int notificationTimeoutTicks = 0;
 
         private const float SPEED_MUL = 0.1f; // rotation input multiplier as it is too fast raw compared to the rest of the game
         private const float MAX_SPEED = 1.8f; // using a max speed to feel like it's on actual servos
-        private static readonly MySoundPair soundPair = new MySoundPair("BlockRotor"); // sound pair used for camera rotation, without the 'Arc' or 'Real' prefix.
+        private const byte SOUND_ROTATE_STOP_DELAY = 10; // game ticks
+        private const byte SOUND_ZOOM_STOP_DELAY = 20; // game ticks
+        private static readonly MySoundPair SOUND_PAIR_ROTATE = new MySoundPair("BlockRotor"); // sound pair used for camera rotation, without the 'Arc' or 'Real' prefix.
+        private static readonly MySoundPair SOUND_PAIR_ZOOM = new MySoundPair("WepShipGatlingRotation"); // sound pair used for camera zooming, without the 'Arc' or 'Real' prefix.
         private const float EPSILON = 0.0001f;
 
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
-            Entity.NeedsUpdate |= MyEntityUpdateEnum.EACH_FRAME;
+            try
+            {
+                CameraPanningMod.updateCameras.Add(this);
+            }
+            catch(Exception e)
+            {
+                MyAPIGateway.Utilities.ShowNotification("Error in " + GetType().Name + " - see SpaceEngineers.log", 5000, MyFontEnum.Red);
+                MyLog.Default.WriteLineAndConsole(e.Message + "\n" + e.StackTrace);
+            }
+        }
+
+        public override void Close()
+        {
+            try
+            {
+                CameraPanningMod.updateCameras.Remove(this);
+
+                if(soundEmitterRotate != null)
+                    soundEmitterRotate.StopSound(true, true);
+
+                if(soundEmitterZoom != null)
+                    soundEmitterZoom.StopSound(true, true);
+            }
+            catch(Exception e)
+            {
+                MyAPIGateway.Utilities.ShowNotification("Error in " + GetType().Name + " - see SpaceEngineers.log", 5000, MyFontEnum.Red);
+                MyLog.Default.WriteLineAndConsole(e.Message + "\n" + e.StackTrace);
+            }
         }
 
         public override MyObjectBuilder_EntityBase GetObjectBuilder(bool copy = false)
@@ -137,7 +204,8 @@ namespace Digi.CameraPanning
             return Entity.GetObjectBuilder(copy);
         }
 
-        public override void UpdateAfterSimulation()
+        // the EACH_FRAME flag on the camera is being removed internally each tick whenever FOV doesn't change
+        public void UpdateCamera()
         {
             try
             {
@@ -150,17 +218,38 @@ namespace Digi.CameraPanning
                     // HACK temporary fix for camera being in the center of the block
                     TryFixCameraPosition(); // moves the camera view's position towards the default mount point by gridSize/2.
 
-                    if(soundEmitter == null)
+                    if(soundEmitterRotate == null)
                     {
-                        soundEmitter = new MyEntity3DSoundEmitter((MyEntity)Entity);
-                        soundEmitter.CustomVolume = 0.6f;
+                        soundEmitterRotate = new MyEntity3DSoundEmitter((MyEntity)Entity);
+                        soundEmitterRotate.CustomVolume = 0.6f;
+                    }
+
+                    if(soundEmitterZoom == null)
+                    {
+                        soundEmitterZoom = new MyEntity3DSoundEmitter((MyEntity)Entity);
+                        soundEmitterZoom.CustomVolume = 0.3f;
                     }
                 }
 
                 bool rotating = Update(); // returns true if the camera is rotating, false otherwise
 
-                if(!rotating && soundEmitter != null && soundEmitter.IsPlaying)
-                    soundEmitter.StopSound(true);
+                if(soundEmitterRotate != null)
+                {
+                    if(rotating && soundZoomStopDelay > 0) // reset the stop delay
+                        soundZoomStopDelay = 0;
+
+                    if(soundEmitterRotate.IsPlaying) // dynamically adjust sound volume depending on last rotation speed
+                        soundEmitterRotate.CustomVolume = 0.2f + (MathHelper.Clamp(currentSpeed / MAX_SPEED, 0, 1) * 0.6f);
+
+                    if(!rotating && soundEmitterRotate != null && soundEmitterRotate.IsPlaying)
+                    {
+                        if(soundZoomStopDelay == 0)
+                            soundZoomStopDelay = SOUND_ZOOM_STOP_DELAY;
+
+                        if(--soundZoomStopDelay == 0)
+                            soundEmitterRotate.StopSound(true);
+                    }
+                }
             }
             catch(Exception e)
             {
@@ -178,7 +267,11 @@ namespace Digi.CameraPanning
                     controlling = false;
                     notificationTimeoutTicks = 150; // (int)((notification.AliveTime / 1000f) * 60f)
 
+                    Entity.Render.Visible = true; // restore camera model
                     Entity.SetLocalMatrix(originalMatrix); // reset the camera's matrix to avoid seeing its model skewed if the model gets updated with the local matrix
+
+                    if(soundEmitterZoom != null)
+                        soundEmitterZoom.StopSound(true);
                 }
 
                 return false;
@@ -190,18 +283,56 @@ namespace Digi.CameraPanning
             var lookaroundControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.LOOKAROUND);
             var rotationTypeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.SPRINT);
             var cameraModeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.CAMERA_MODE);
+            var FOV = MyAPIGateway.Session.Camera.FovWithZoom;
 
             if(!controlling)
             {
                 controlling = true; // only show this message once per camera control
 
+                Entity.Render.Visible = false; // hide the camera model to avoid weirdness
                 Entity.SetLocalMatrix(rotatedMatrix); // restore the last view matrix
+                prevFOV = FOV;
+
+                // HACK seems to not want to change the definition in my session init anymore, for some reason
+                var def = ((MyCameraBlock)Entity).BlockDefinition;
+
+                if(def.Id == CameraPanningMod.CAMERA_LARGE_ID || def.Id == CameraPanningMod.CAMERA_SMALL_ID)
+                    def.MaxFov = CameraPanningMod.CAMERA_FOV;
 
                 if(notification == null)
-                    notification = MyAPIGateway.Utilities.CreateNotification("", 2500);
+                    notification = MyAPIGateway.Utilities.CreateNotification("");
 
+                notification.AliveTime = 2500;
                 notification.Text = "Hold " + GetControlAssignedName(lookaroundControl) + " to pan camera, " + GetControlAssignedName(lookaroundControl) + "+" + GetControlAssignedName(rotationTypeControl) + " to change rotation type and " + GetControlAssignedName(cameraModeControl) + " to reset.";
                 notification.Show();
+            }
+            else
+            {
+                if(Math.Abs(FOV - prevFOV) > 0.05f)
+                {
+                    prevFOV = FOV;
+
+                    if(soundEmitterZoom != null && !soundEmitterZoom.IsPlaying)
+                    {
+                        soundEmitterZoom.PlaySound(SOUND_PAIR_ZOOM, false, true, false, true, false);
+                        soundZoomStopDelay = SOUND_ZOOM_STOP_DELAY;
+                    }
+
+                    if(notification != null)
+                    {
+                        notification.AliveTime = 300;
+                        notification.Text = Math.Round(MathHelper.ToDegrees(FOV), 0) + "°";
+                        notification.Show();
+                    }
+                }
+                else
+                {
+                    if(soundEmitterZoom != null && soundEmitterZoom.IsPlaying)
+                    {
+                        if(soundZoomStopDelay == 0 || --soundZoomStopDelay == 0)
+                            soundEmitterZoom.StopSound(true);
+                    }
+                }
             }
 
             if(!recenter && cameraModeControl.IsNewPressed() && IsInputReadable()) // TODO cache this IsInputReadable() and check it in front, after it stops spewing exceptions
@@ -228,6 +359,7 @@ namespace Digi.CameraPanning
 
                     if(rollToggle)
                     {
+                        // slowly reset yaw while giving control to roll
                         if(RotateCamera(rot.X * SPEED_MUL, MathHelper.Lerp(currentYaw, 0f, 0.1f), rot.Y * SPEED_MUL))
                             return true;
                     }
@@ -280,6 +412,11 @@ namespace Digi.CameraPanning
             return value;
         }
 
+        private float ClampMaxSpeed(float value)
+        {
+            return MathHelper.Clamp(value, -MAX_SPEED, MAX_SPEED);
+        }
+
         private bool RotateCamera(float pitchMod, float yawMod, float rollMod)
         {
             var camera = (IMyCameraBlock)Entity;
@@ -289,12 +426,17 @@ namespace Digi.CameraPanning
             float angleLimit = camera.RaycastConeLimit;
 #endif
 
-            var setPitch = ClampAngle(currentPitch - MathHelper.Clamp(pitchMod, -MAX_SPEED, MAX_SPEED), angleLimit);
-            var setYaw = ClampAngle(currentYaw - MathHelper.Clamp(yawMod, -MAX_SPEED, MAX_SPEED), angleLimit);
-            var setRoll = ClampAngle(currentRoll - MathHelper.Clamp(rollMod, -MAX_SPEED, MAX_SPEED));
+            pitchMod = ClampMaxSpeed(pitchMod);
+            yawMod = ClampMaxSpeed(yawMod);
+            rollMod = ClampMaxSpeed(rollMod);
 
-            if(Math.Abs(setPitch - currentPitch) >= 0.001f || Math.Abs(setYaw - currentYaw) >= 0.001f || Math.Abs(setRoll - currentRoll) >= 0.001f)
+            var setPitch = ClampAngle(currentPitch - pitchMod, angleLimit);
+            var setYaw = ClampAngle(currentYaw - yawMod, angleLimit);
+            var setRoll = ClampAngle(currentRoll - rollMod);
+
+            if(Math.Abs(setPitch - currentPitch) >= EPSILON || Math.Abs(setYaw - currentYaw) >= EPSILON || Math.Abs(setRoll - currentRoll) >= EPSILON)
             {
+                currentSpeed = new Vector3(pitchMod, yawMod, rollMod).Length();
                 currentPitch = setPitch;
                 currentYaw = setYaw;
                 currentRoll = setRoll;
@@ -304,8 +446,8 @@ namespace Digi.CameraPanning
                 rotatedMatrix.Translation = originalMatrix.Translation + positionOffset;
                 Entity.SetLocalMatrix(rotatedMatrix);
 
-                if(soundEmitter != null && !soundEmitter.IsPlaying)
-                    soundEmitter.PlaySound(soundPair, true, true);
+                if(soundEmitterRotate != null && !soundEmitterRotate.IsPlaying)
+                    soundEmitterRotate.PlaySound(SOUND_PAIR_ROTATE, true, true, false, true);
 
                 return true;
             }
