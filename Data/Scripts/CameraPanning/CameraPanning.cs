@@ -20,17 +20,24 @@ namespace Digi.CameraPanning
     [MySessionComponentDescriptor(MyUpdateOrder.AfterSimulation)]
     public class CameraPanningMod : MySessionComponentBase
     {
+        private const ulong WORKSHOPID = 806331071;
+
+        public override void LoadData()
+        {
+            Log.SetUp("Camera Panning", WORKSHOPID, "CameraPanning");
+        }
+
         private bool init = false;
 
         private float originalCameraFovSmall = 0;
         private float originalCameraFovLarge = 0;
-
-        public static List<CameraBlock> updateCameras = new List<CameraBlock>();
+        
+        public static readonly List<CameraBlock> updateCameras = new List<CameraBlock>();
 
         public static readonly float CAMERA_FOV = MathHelper.ToRadians(100);
         public static readonly MyDefinitionId CAMERA_SMALL_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "SmallCameraBlock");
         public static readonly MyDefinitionId CAMERA_LARGE_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "LargeCameraBlock");
-
+        
         public override void HandleInput()
         {
             try
@@ -42,7 +49,7 @@ namespace Digi.CameraPanning
                 {
                     var camLogic = updateCameras[i];
 
-                    if(camLogic.Entity == null || camLogic.Entity.MarkedForClose || camLogic.Entity.Closed)
+                    if(camLogic == null || camLogic.Entity == null || camLogic.Entity.MarkedForClose || camLogic.Entity.Closed)
                     {
                         updateCameras.RemoveAt(i);
                         continue;
@@ -53,18 +60,14 @@ namespace Digi.CameraPanning
             }
             catch(Exception e)
             {
-                MyAPIGateway.Utilities.ShowNotification("Error in " + GetType().Name + " - see SpaceEngineers.log", 5000, MyFontEnum.Red);
-                MyLog.Default.WriteLineAndConsole(e.Message + "\n" + e.StackTrace);
+                Log.Error(e);
             }
         }
 
         public override void UpdateAfterSimulation()
         {
             if(init)
-            {
-                MyLog.Default.WriteLine("WARNING: " + GetType().Name + " still updates after the update method was disabled!");
                 return;
-            }
 
             try
             {
@@ -72,6 +75,7 @@ namespace Digi.CameraPanning
                     return;
 
                 init = true;
+                Log.Init();
 
                 var def = GetCameraDefinition(CAMERA_SMALL_ID);
 
@@ -97,8 +101,7 @@ namespace Digi.CameraPanning
             }
             catch(Exception e)
             {
-                MyAPIGateway.Utilities.ShowNotification("Error in " + GetType().Name + " - see SpaceEngineers.log", 5000, MyFontEnum.Red);
-                MyLog.Default.WriteLineAndConsole(e.Message + "\n" + e.StackTrace);
+                Log.Error(e);
             }
         }
 
@@ -119,11 +122,11 @@ namespace Digi.CameraPanning
             }
             catch(Exception e)
             {
-                MyAPIGateway.Utilities.ShowNotification("Error in " + GetType().Name + " - see SpaceEngineers.log", 5000, MyFontEnum.Red);
-                MyLog.Default.WriteLineAndConsole(e.Message + "\n" + e.StackTrace);
+                Log.Error(e);
             }
-
+            
             updateCameras.Clear();
+            Log.Close();
         }
 
         private MyCameraBlockDefinition GetCameraDefinition(MyDefinitionId defId)
@@ -140,7 +143,6 @@ namespace Digi.CameraPanning
     [MyEntityComponentDescriptor(typeof(MyObjectBuilder_CameraBlock))]
     public class CameraBlock : MyGameLogicComponent
     {
-        private bool first = true;
         private bool controlling = false;
         private bool recenter = false;
         private Matrix originalMatrix;
@@ -153,8 +155,8 @@ namespace Digi.CameraPanning
         private float prevFOV = 0;
         private byte soundRotateStopDelay = 0;
         private byte soundZoomStopDelay = 0;
-        private MyEntity3DSoundEmitter soundEmitterRotate = null;
-        private MyEntity3DSoundEmitter soundEmitterZoom = null;
+        private MyEntity3DSoundEmitter soundRotateEmitter = null;
+        private MyEntity3DSoundEmitter soundZoomEmitter = null;
 
         private static IMyHudNotification notification = null;
         private static int notificationTimeoutTicks = 0;
@@ -162,21 +164,48 @@ namespace Digi.CameraPanning
         private const float SPEED_MUL = 0.1f; // rotation input multiplier as it is too fast raw compared to the rest of the game
         private const float MAX_SPEED = 1.8f; // using a max speed to feel like it's on actual servos
         private const byte SOUND_ROTATE_STOP_DELAY = 10; // game ticks
-        private const byte SOUND_ZOOM_STOP_DELAY = 20; // game ticks
-        private static readonly MySoundPair SOUND_PAIR_ROTATE = new MySoundPair("BlockRotor"); // sound pair used for camera rotation, without the 'Arc' or 'Real' prefix.
-        private static readonly MySoundPair SOUND_PAIR_ZOOM = new MySoundPair("WepShipGatlingRotation"); // sound pair used for camera zooming, without the 'Arc' or 'Real' prefix.
+        private const byte SOUND_ZOOM_STOP_DELAY = 30; // game ticks
+        private static readonly MySoundPair SOUND_ROTATE_PAIR = new MySoundPair("BlockRotor"); // sound pair used for camera rotation, without the 'Arc' or 'Real' prefix.
+        private static readonly MySoundPair SOUND_ZOOM_PAIR = new MySoundPair("WepShipGatlingRotation"); // sound pair used for camera zooming, without the 'Arc' or 'Real' prefix.
         private const float EPSILON = 0.0001f;
 
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
+            Entity.NeedsUpdate |= MyEntityUpdateEnum.BEFORE_NEXT_FRAME;
+        }
+
+        public override void UpdateOnceBeforeFrame()
+        {
             try
             {
+                var block = (MyCubeBlock)Entity;
+
+                if(block.CubeGrid.IsPreview || block.CubeGrid.Physics == null) // ignore ghost grids
+                    return;
+
                 CameraPanningMod.updateCameras.Add(this);
+
+                originalMatrix = Entity.LocalMatrix;
+                rotatedMatrix = originalMatrix;
+
+                // HACK temporary fix for camera being in the center of the block
+                TryFixCameraPosition(); // moves the camera view's position towards the default mount point by gridSize/2.
+
+                if(soundRotateEmitter == null)
+                {
+                    soundRotateEmitter = new MyEntity3DSoundEmitter((MyEntity)Entity);
+                    soundRotateEmitter.CustomVolume = 0.6f;
+                }
+
+                if(soundZoomEmitter == null)
+                {
+                    soundZoomEmitter = new MyEntity3DSoundEmitter((MyEntity)Entity);
+                    soundZoomEmitter.CustomVolume = 0.3f;
+                }
             }
             catch(Exception e)
             {
-                MyAPIGateway.Utilities.ShowNotification("Error in " + GetType().Name + " - see SpaceEngineers.log", 5000, MyFontEnum.Red);
-                MyLog.Default.WriteLineAndConsole(e.Message + "\n" + e.StackTrace);
+                Log.Error(e);
             }
         }
 
@@ -186,16 +215,15 @@ namespace Digi.CameraPanning
             {
                 CameraPanningMod.updateCameras.Remove(this);
 
-                if(soundEmitterRotate != null)
-                    soundEmitterRotate.StopSound(true, true);
+                if(soundRotateEmitter != null)
+                    soundRotateEmitter.StopSound(true, true);
 
-                if(soundEmitterZoom != null)
-                    soundEmitterZoom.StopSound(true, true);
+                if(soundZoomEmitter != null)
+                    soundZoomEmitter.StopSound(true, true);
             }
             catch(Exception e)
             {
-                MyAPIGateway.Utilities.ShowNotification("Error in " + GetType().Name + " - see SpaceEngineers.log", 5000, MyFontEnum.Red);
-                MyLog.Default.WriteLineAndConsole(e.Message + "\n" + e.StackTrace);
+                Log.Error(e);
             }
         }
 
@@ -209,52 +237,29 @@ namespace Digi.CameraPanning
         {
             try
             {
-                if(first)
-                {
-                    first = false;
-                    originalMatrix = Entity.LocalMatrix;
-                    rotatedMatrix = originalMatrix;
-
-                    // HACK temporary fix for camera being in the center of the block
-                    TryFixCameraPosition(); // moves the camera view's position towards the default mount point by gridSize/2.
-
-                    if(soundEmitterRotate == null)
-                    {
-                        soundEmitterRotate = new MyEntity3DSoundEmitter((MyEntity)Entity);
-                        soundEmitterRotate.CustomVolume = 0.6f;
-                    }
-
-                    if(soundEmitterZoom == null)
-                    {
-                        soundEmitterZoom = new MyEntity3DSoundEmitter((MyEntity)Entity);
-                        soundEmitterZoom.CustomVolume = 0.3f;
-                    }
-                }
-
                 bool rotating = Update(); // returns true if the camera is rotating, false otherwise
 
-                if(soundEmitterRotate != null)
+                if(soundRotateEmitter != null)
                 {
-                    if(rotating && soundZoomStopDelay > 0) // reset the stop delay
-                        soundZoomStopDelay = 0;
+                    if(rotating && soundRotateStopDelay > 0) // reset the stop delay
+                        soundRotateStopDelay = 0;
 
-                    if(soundEmitterRotate.IsPlaying) // dynamically adjust sound volume depending on last rotation speed
-                        soundEmitterRotate.CustomVolume = 0.2f + (MathHelper.Clamp(currentSpeed / MAX_SPEED, 0, 1) * 0.6f);
+                    if(soundRotateEmitter.IsPlaying) // dynamically adjust sound volume depending on last rotation speed
+                        soundRotateEmitter.CustomVolume = 0.2f + (MathHelper.Clamp(currentSpeed / MAX_SPEED, 0, 1) * 0.6f);
 
-                    if(!rotating && soundEmitterRotate != null && soundEmitterRotate.IsPlaying)
+                    if(!rotating && soundRotateEmitter != null && soundRotateEmitter.IsPlaying)
                     {
-                        if(soundZoomStopDelay == 0)
-                            soundZoomStopDelay = SOUND_ZOOM_STOP_DELAY;
+                        if(soundRotateStopDelay == 0)
+                            soundRotateStopDelay = SOUND_ZOOM_STOP_DELAY;
 
-                        if(--soundZoomStopDelay == 0)
-                            soundEmitterRotate.StopSound(true);
+                        if(--soundRotateStopDelay == 0)
+                            soundRotateEmitter.StopSound(true);
                     }
                 }
             }
             catch(Exception e)
             {
-                MyAPIGateway.Utilities.ShowNotification("Error in " + GetType().Name + " - see SpaceEngineers.log", 5000, MyFontEnum.Red);
-                MyLog.Default.WriteLineAndConsole(e.Message + "\n" + e.StackTrace);
+                Log.Error(e);
             }
         }
 
@@ -269,9 +274,10 @@ namespace Digi.CameraPanning
 
                     Entity.Render.Visible = true; // restore camera model
                     Entity.SetLocalMatrix(originalMatrix); // reset the camera's matrix to avoid seeing its model skewed if the model gets updated with the local matrix
+                    Entity.Render.UpdateRenderObject(true); // force model to be recalculated to avoid invisible models on merge/unmerge while camera is viewed
 
-                    if(soundEmitterZoom != null)
-                        soundEmitterZoom.StopSound(true);
+                    if(soundZoomEmitter != null)
+                        soundZoomEmitter.StopSound(true);
                 }
 
                 return false;
@@ -279,7 +285,7 @@ namespace Digi.CameraPanning
 
             if(notificationTimeoutTicks > 0)
                 notificationTimeoutTicks--;
-
+            
             var lookaroundControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.LOOKAROUND);
             var rotationTypeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.SPRINT);
             var cameraModeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.CAMERA_MODE);
@@ -312,9 +318,9 @@ namespace Digi.CameraPanning
                 {
                     prevFOV = FOV;
 
-                    if(soundEmitterZoom != null && !soundEmitterZoom.IsPlaying)
+                    if(soundZoomEmitter != null && !soundZoomEmitter.IsPlaying)
                     {
-                        soundEmitterZoom.PlaySound(SOUND_PAIR_ZOOM, false, true, false, true, false);
+                        soundZoomEmitter.PlaySound(SOUND_ZOOM_PAIR, stopPrevious: true, skipIntro: true, alwaysHearOnRealistic: true, force2D: true);
                         soundZoomStopDelay = SOUND_ZOOM_STOP_DELAY;
                     }
 
@@ -327,10 +333,10 @@ namespace Digi.CameraPanning
                 }
                 else
                 {
-                    if(soundEmitterZoom != null && soundEmitterZoom.IsPlaying)
+                    if(soundZoomEmitter != null && soundZoomEmitter.IsPlaying)
                     {
                         if(soundZoomStopDelay == 0 || --soundZoomStopDelay == 0)
-                            soundEmitterZoom.StopSound(true);
+                            soundZoomEmitter.StopSound(true);
                     }
                 }
             }
@@ -340,7 +346,7 @@ namespace Digi.CameraPanning
                 recenter = true;
                 return false; // no reason to compute further
             }
-
+            
             if(lookaroundControl.IsPressed() && IsInputReadable())
             {
                 if(notificationTimeoutTicks > 0)
@@ -446,8 +452,8 @@ namespace Digi.CameraPanning
                 rotatedMatrix.Translation = originalMatrix.Translation + positionOffset;
                 Entity.SetLocalMatrix(rotatedMatrix);
 
-                if(soundEmitterRotate != null && !soundEmitterRotate.IsPlaying)
-                    soundEmitterRotate.PlaySound(SOUND_PAIR_ROTATE, true, true, false, true);
+                if(soundRotateEmitter != null && !soundRotateEmitter.IsPlaying)
+                    soundRotateEmitter.PlaySound(SOUND_ROTATE_PAIR, stopPrevious: true, skipIntro: true, alwaysHearOnRealistic: true, force2D: true);
 
                 return true;
             }
