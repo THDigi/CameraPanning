@@ -20,49 +20,21 @@ namespace Digi.CameraPanning
     [MySessionComponentDescriptor(MyUpdateOrder.AfterSimulation)]
     public class CameraPanningMod : MySessionComponentBase
     {
-        private const ulong WORKSHOPID = 806331071;
-
         public override void LoadData()
         {
+            instance = this;
             Log.SetUp("Camera Panning", WORKSHOPID, "CameraPanning");
         }
 
+        public static CameraPanningMod instance = null;
         private bool init = false;
-
         private float originalCameraFovSmall = 0;
         private float originalCameraFovLarge = 0;
-        
-        public static readonly List<CameraBlock> updateCameras = new List<CameraBlock>();
 
-        public static readonly float CAMERA_FOV = MathHelper.ToRadians(100);
-        public static readonly MyDefinitionId CAMERA_SMALL_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "SmallCameraBlock");
-        public static readonly MyDefinitionId CAMERA_LARGE_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "LargeCameraBlock");
-        
-        public override void HandleInput()
-        {
-            try
-            {
-                if(!init || updateCameras.Count == 0)
-                    return;
-
-                for(int i = updateCameras.Count - 1; i >= 0; i--)
-                {
-                    var camLogic = updateCameras[i];
-
-                    if(camLogic == null || camLogic.Entity == null || camLogic.Entity.MarkedForClose || camLogic.Entity.Closed)
-                    {
-                        updateCameras.RemoveAt(i);
-                        continue;
-                    }
-
-                    camLogic.UpdateCamera();
-                }
-            }
-            catch(Exception e)
-            {
-                Log.Error(e);
-            }
-        }
+        private const ulong WORKSHOPID = 806331071;
+        public readonly float CAMERA_FOV = MathHelper.ToRadians(100);
+        public readonly MyDefinitionId CAMERA_SMALL_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "SmallCameraBlock");
+        public readonly MyDefinitionId CAMERA_LARGE_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "LargeCameraBlock");
 
         public override void UpdateAfterSimulation()
         {
@@ -94,10 +66,7 @@ namespace Digi.CameraPanning
                 }
 
                 // SetUpdateOrder() throws an exception if called in the update method; this to overcomes that
-                MyAPIGateway.Utilities.InvokeOnGameThread(delegate ()
-                {
-                    SetUpdateOrder(MyUpdateOrder.NoUpdate);
-                });
+                MyAPIGateway.Utilities.InvokeOnGameThread(() => SetUpdateOrder(MyUpdateOrder.NoUpdate));
             }
             catch(Exception e)
             {
@@ -124,8 +93,8 @@ namespace Digi.CameraPanning
             {
                 Log.Error(e);
             }
-            
-            updateCameras.Clear();
+
+            instance = null;
             Log.Close();
         }
 
@@ -140,7 +109,7 @@ namespace Digi.CameraPanning
         }
     }
 
-    [MyEntityComponentDescriptor(typeof(MyObjectBuilder_CameraBlock))]
+    [MyEntityComponentDescriptor(typeof(MyObjectBuilder_CameraBlock), useEntityUpdate: false)]
     public class CameraBlock : MyGameLogicComponent
     {
         private bool controlling = false;
@@ -171,7 +140,7 @@ namespace Digi.CameraPanning
 
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
-            Entity.NeedsUpdate |= MyEntityUpdateEnum.BEFORE_NEXT_FRAME;
+            NeedsUpdate = MyEntityUpdateEnum.BEFORE_NEXT_FRAME;
         }
 
         public override void UpdateOnceBeforeFrame()
@@ -183,7 +152,7 @@ namespace Digi.CameraPanning
                 if(block.CubeGrid.IsPreview || block.CubeGrid.Physics == null) // ignore ghost grids
                     return;
 
-                CameraPanningMod.updateCameras.Add(this);
+                NeedsUpdate = MyEntityUpdateEnum.EACH_FRAME;
 
                 originalMatrix = Entity.LocalMatrix;
                 rotatedMatrix = originalMatrix;
@@ -213,8 +182,6 @@ namespace Digi.CameraPanning
         {
             try
             {
-                CameraPanningMod.updateCameras.Remove(this);
-
                 if(soundRotateEmitter != null)
                     soundRotateEmitter.StopSound(true, true);
 
@@ -227,13 +194,7 @@ namespace Digi.CameraPanning
             }
         }
 
-        public override MyObjectBuilder_EntityBase GetObjectBuilder(bool copy = false)
-        {
-            return Entity.GetObjectBuilder(copy);
-        }
-
-        // the EACH_FRAME flag on the camera is being removed internally each tick whenever FOV doesn't change
-        public void UpdateCamera()
+        public override void UpdateAfterSimulation()
         {
             try
             {
@@ -285,7 +246,7 @@ namespace Digi.CameraPanning
 
             if(notificationTimeoutTicks > 0)
                 notificationTimeoutTicks--;
-            
+
             var lookaroundControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.LOOKAROUND);
             var rotationTypeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.SPRINT);
             var cameraModeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.CAMERA_MODE);
@@ -302,8 +263,8 @@ namespace Digi.CameraPanning
                 // HACK seems to not want to change the definition in my session init anymore, for some reason
                 var def = ((MyCameraBlock)Entity).BlockDefinition;
 
-                if(def.Id == CameraPanningMod.CAMERA_LARGE_ID || def.Id == CameraPanningMod.CAMERA_SMALL_ID)
-                    def.MaxFov = CameraPanningMod.CAMERA_FOV;
+                if(def.Id == CameraPanningMod.instance.CAMERA_LARGE_ID || def.Id == CameraPanningMod.instance.CAMERA_SMALL_ID)
+                    def.MaxFov = CameraPanningMod.instance.CAMERA_FOV;
 
                 if(notification == null)
                     notification = MyAPIGateway.Utilities.CreateNotification("");
@@ -340,45 +301,48 @@ namespace Digi.CameraPanning
                     }
                 }
             }
-
-            if(!recenter && cameraModeControl.IsNewPressed() && IsInputReadable()) // TODO cache this IsInputReadable() and check it in front, after it stops spewing exceptions
-            {
-                recenter = true;
-                return false; // no reason to compute further
-            }
             
-            if(lookaroundControl.IsPressed() && IsInputReadable())
+            if(!MyAPIGateway.Gui.ChatEntryVisible && !MyAPIGateway.Gui.IsCursorVisible)
             {
-                if(notificationTimeoutTicks > 0)
+                if(!recenter && cameraModeControl.IsNewPressed())
                 {
-                    notificationTimeoutTicks = 0;
-                    notification.Hide();
+                    recenter = true;
+                    return false; // no reason to compute further
                 }
 
-                var rot = MyAPIGateway.Input.GetRotation();
-                bool rollToggle = rotationTypeControl.IsPressed();
-
-                if(Math.Abs(rot.X) > EPSILON || Math.Abs(rot.Y) > EPSILON)
+                if(lookaroundControl.IsPressed())
                 {
-                    if(recenter)
-                        recenter = false;
-
-                    if(rollToggle)
+                    if(notificationTimeoutTicks > 0)
                     {
-                        // slowly reset yaw while giving control to roll
-                        if(RotateCamera(rot.X * SPEED_MUL, MathHelper.Lerp(currentYaw, 0f, 0.1f), rot.Y * SPEED_MUL))
+                        notificationTimeoutTicks = 0;
+                        notification.Hide();
+                    }
+
+                    var rot = MyAPIGateway.Input.GetRotation();
+                    bool rollToggle = rotationTypeControl.IsPressed();
+
+                    if(Math.Abs(rot.X) > EPSILON || Math.Abs(rot.Y) > EPSILON)
+                    {
+                        if(recenter)
+                            recenter = false;
+
+                        if(rollToggle)
+                        {
+                            // slowly reset yaw while giving control to roll
+                            if(RotateCamera(rot.X * SPEED_MUL, MathHelper.Lerp(currentYaw, 0f, 0.1f), rot.Y * SPEED_MUL))
+                                return true;
+                        }
+                        else
+                        {
+                            if(RotateCamera(rot.X * SPEED_MUL, rot.Y * SPEED_MUL, 0))
+                                return true;
+                        }
+                    }
+                    else if(rollToggle && Math.Abs(currentYaw) > EPSILON) // not moving mouse but holding modifier should result in yaw being slowly reset to 0
+                    {
+                        if(RotateCamera(0, MathHelper.Lerp(currentYaw, 0f, 0.1f), 0))
                             return true;
                     }
-                    else
-                    {
-                        if(RotateCamera(rot.X * SPEED_MUL, rot.Y * SPEED_MUL, 0))
-                            return true;
-                    }
-                }
-                else if(rollToggle && Math.Abs(currentYaw) > EPSILON) // not moving mouse but holding modifier should result in yaw being slowly reset to 0
-                {
-                    if(RotateCamera(0, MathHelper.Lerp(currentYaw, 0f, 0.1f), 0))
-                        return true;
                 }
             }
 
@@ -426,11 +390,7 @@ namespace Digi.CameraPanning
         private bool RotateCamera(float pitchMod, float yawMod, float rollMod)
         {
             var camera = (IMyCameraBlock)Entity;
-#if STABLE // HACK > STABLE CONDITION
-            float angleLimit = 45f;
-#else
             float angleLimit = camera.RaycastConeLimit;
-#endif
 
             pitchMod = ClampMaxSpeed(pitchMod);
             yawMod = ClampMaxSpeed(yawMod);
@@ -459,26 +419,6 @@ namespace Digi.CameraPanning
             }
 
             return false;
-        }
-
-        private static string GetControlAssignedName(IMyControl control)
-        {
-            var assign = control.GetControlButtonName(MyGuiInputDeviceEnum.Mouse);
-
-            if(!string.IsNullOrWhiteSpace(assign))
-                return assign;
-
-            assign = control.GetControlButtonName(MyGuiInputDeviceEnum.Keyboard);
-
-            if(!string.IsNullOrWhiteSpace(assign))
-                return assign;
-
-            assign = control.GetControlButtonName(MyGuiInputDeviceEnum.KeyboardSecond);
-
-            if(!string.IsNullOrWhiteSpace(assign))
-                return assign;
-
-            return "(unassigned)";
         }
 
         private MyCubeBlockDefinition.MountPoint GetDefaultMountPoint(MyCubeBlock block)
@@ -511,23 +451,24 @@ namespace Digi.CameraPanning
             }
         }
 
-        private static bool IsInputReadable()
+        private static string GetControlAssignedName(IMyControl control)
         {
-            // TODO detect properly: escape menu, F10 and F11 menus, mission screens, yes/no notifications.
+            var assign = control.GetControlButtonName(MyGuiInputDeviceEnum.Mouse);
 
-            var GUI = MyAPIGateway.Gui;
+            if(!string.IsNullOrWhiteSpace(assign))
+                return assign;
 
-            if(GUI.ChatEntryVisible || GUI.GetCurrentScreen != MyTerminalPageEnum.None)
-                return false;
+            assign = control.GetControlButtonName(MyGuiInputDeviceEnum.Keyboard);
 
-            try // HACK ActiveGamePlayScreen throws NRE when called while not in a menu
-            {
-                return GUI.ActiveGamePlayScreen == null;
-            }
-            catch(Exception)
-            {
-                return true;
-            }
+            if(!string.IsNullOrWhiteSpace(assign))
+                return assign;
+
+            assign = control.GetControlButtonName(MyGuiInputDeviceEnum.KeyboardSecond);
+
+            if(!string.IsNullOrWhiteSpace(assign))
+                return assign;
+
+            return "(unassigned)";
         }
     }
 }
