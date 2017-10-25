@@ -31,7 +31,7 @@ namespace Digi.CameraPanning
         private float originalCameraFovLarge = 0;
 
         private const ulong WORKSHOPID = 806331071;
-        public readonly float CAMERA_FOV = MathHelper.ToRadians(100);
+        public const float CAMERA_FOV = (float)(100 / 180d * Math.PI); // 100 degrees in radians
         public readonly MyDefinitionId CAMERA_SMALL_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "SmallCameraBlock");
         public readonly MyDefinitionId CAMERA_LARGE_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "LargeCameraBlock");
 
@@ -137,7 +137,7 @@ namespace Digi.CameraPanning
         {
             MyCubeBlockDefinition def;
 
-            if(MyDefinitionManager.Static.TryGetCubeBlockDefinition(CAMERA_SMALL_ID, out def))
+            if(MyDefinitionManager.Static.TryGetCubeBlockDefinition(defId, out def))
                 return def as MyCameraBlockDefinition;
 
             return null;
@@ -169,6 +169,8 @@ namespace Digi.CameraPanning
         private const float MAX_SPEED = 1.8f; // using a max speed to feel like it's on actual servos
         private const byte SOUND_ROTATE_STOP_DELAY = 10; // game ticks
         private const byte SOUND_ZOOM_STOP_DELAY = 30; // game ticks
+        private const float SOUND_ROTATE_VOLUME = 0.5f;
+        private const float SOUND_ZOOM_VOLUME = 0.2f;
         private static readonly MySoundPair SOUND_ROTATE_PAIR = new MySoundPair("BlockRotor"); // sound pair used for camera rotation, without the 'Arc' or 'Real' prefix.
         private static readonly MySoundPair SOUND_ZOOM_PAIR = new MySoundPair("WepShipGatlingRotation"); // sound pair used for camera zooming, without the 'Arc' or 'Real' prefix.
         private const float EPSILON = 0.0001f;
@@ -198,13 +200,13 @@ namespace Digi.CameraPanning
                 if(soundRotateEmitter == null)
                 {
                     soundRotateEmitter = new MyEntity3DSoundEmitter((MyEntity)Entity);
-                    soundRotateEmitter.CustomVolume = 0.6f;
+                    soundRotateEmitter.CustomVolume = SOUND_ROTATE_VOLUME;
                 }
 
                 if(soundZoomEmitter == null)
                 {
                     soundZoomEmitter = new MyEntity3DSoundEmitter((MyEntity)Entity);
-                    soundZoomEmitter.CustomVolume = 0.3f;
+                    soundZoomEmitter.CustomVolume = SOUND_ZOOM_VOLUME;
                 }
             }
             catch(Exception e)
@@ -294,13 +296,7 @@ namespace Digi.CameraPanning
                 Entity.Render.Visible = false; // hide the camera model to avoid weirdness
                 Entity.SetLocalMatrix(rotatedMatrix); // restore the last view matrix
                 prevFOV = FOV;
-
-                // HACK seems to not want to change the definition in my session init anymore, for some reason
-                var def = ((MyCameraBlock)Entity).BlockDefinition;
-
-                if(def.Id == CameraPanningMod.instance.CAMERA_LARGE_ID || def.Id == CameraPanningMod.instance.CAMERA_SMALL_ID)
-                    def.MaxFov = CameraPanningMod.instance.CAMERA_FOV;
-
+                
                 if(notification == null)
                     notification = MyAPIGateway.Utilities.CreateNotification("");
 
@@ -481,7 +477,7 @@ namespace Digi.CameraPanning
 
             if(block.BlockDefinition.ModelOffset.LengthSquared() <= EPSILON) // ignore mods that have model offset because that also moves camera position
             {
-                positionOffset = Vector3.TransformNormal((Vector3)mount.Normal, originalMatrix) * ((block.CubeGrid.GridSize / 2) + 0.05f);
+                positionOffset = Vector3.TransformNormal((Vector3)mount.Normal, originalMatrix) * ((block.CubeGrid.GridSize / 2f) - 0.05f);
                 rotatedMatrix.Translation = originalMatrix.Translation + positionOffset;
             }
         }
