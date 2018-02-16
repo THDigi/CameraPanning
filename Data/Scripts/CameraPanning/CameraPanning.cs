@@ -265,7 +265,7 @@ namespace Digi.CameraPanning
         {
             if(MyAPIGateway.Session.CameraController != Entity)
             {
-                if(controlling)
+                if(controlling) // if it was being controlled, restore the local matrix, stop sounds, etc
                 {
                     controlling = false;
                     notificationTimeoutTicks = 150; // (int)((notification.AliveTime / 1000f) * 60f)
@@ -278,7 +278,7 @@ namespace Digi.CameraPanning
                         soundZoomEmitter.StopSound(true);
                 }
 
-                return false;
+                return false; // not controlled, no need to update further
             }
 
             if(notificationTimeoutTicks > 0)
@@ -289,14 +289,18 @@ namespace Digi.CameraPanning
             var cameraModeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.CAMERA_MODE);
             var FOV = MyAPIGateway.Session.Camera.FovWithZoom;
 
-            if(!controlling)
+            if(!controlling) // just taken control of this camera
             {
                 controlling = true; // only show this message once per camera control
 
                 Entity.Render.Visible = false; // hide the camera model to avoid weirdness
+
+                originalMatrix = Entity.LocalMatrix; // recalculate original matrix and rotated matrix in case the block was "moved" (by merge or who knows what else)
+                RotateCamera(0, 0, 0, true);
+
                 Entity.SetLocalMatrix(rotatedMatrix); // restore the last view matrix
                 prevFOV = FOV;
-                
+
                 if(notification == null)
                     notification = MyAPIGateway.Utilities.CreateNotification("");
 
@@ -418,7 +422,7 @@ namespace Digi.CameraPanning
             return MathHelper.Clamp(value, -MAX_SPEED, MAX_SPEED);
         }
 
-        private bool RotateCamera(float pitchMod, float yawMod, float rollMod)
+        private bool RotateCamera(float pitchMod, float yawMod, float rollMod, bool forceRecalculate = false)
         {
             var camera = (IMyCameraBlock)Entity;
             float angleLimit = camera.RaycastConeLimit;
@@ -431,7 +435,7 @@ namespace Digi.CameraPanning
             var setYaw = ClampAngle(currentYaw - yawMod, angleLimit);
             var setRoll = ClampAngle(currentRoll - rollMod);
 
-            if(Math.Abs(setPitch - currentPitch) >= EPSILON || Math.Abs(setYaw - currentYaw) >= EPSILON || Math.Abs(setRoll - currentRoll) >= EPSILON)
+            if(forceRecalculate || Math.Abs(setPitch - currentPitch) >= EPSILON || Math.Abs(setYaw - currentYaw) >= EPSILON || Math.Abs(setRoll - currentRoll) >= EPSILON)
             {
                 currentSpeed = new Vector3(pitchMod, yawMod, rollMod).Length();
                 currentPitch = setPitch;
