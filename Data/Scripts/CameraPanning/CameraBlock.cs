@@ -140,7 +140,7 @@ namespace Digi.CameraPanning
                     controlling = false;
                     notificationTimeoutTicks = 150; // (int)((notification.AliveTime / 1000f) * 60f)
 
-                    Entity.Render.Visible = true; // restore camera model
+                    //Entity.Render.Visible = true; // restore camera model
                     Entity.SetLocalMatrix(originalMatrix); // reset the camera's matrix to avoid seeing its model skewed if the model gets updated with the local matrix
                     Entity.Render.UpdateRenderObject(true); // force model to be recalculated to avoid invisible models on merge/unmerge while camera is viewed
 
@@ -163,7 +163,7 @@ namespace Digi.CameraPanning
             {
                 controlling = true; // only show this message once per camera control
 
-                Entity.Render.Visible = false; // hide the camera model to avoid weirdness
+                //Entity.Render.Visible = false; // hide the camera model to avoid weirdness
 
                 originalMatrix = Entity.LocalMatrix; // recalculate original matrix and rotated matrix in case the block was "moved" (by merge or who knows what else)
                 RotateCamera(0, 0, 0, true);
