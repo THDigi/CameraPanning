@@ -26,14 +26,16 @@ namespace Digi.CameraPanning
         private float currentYaw = 0;
         private float currentRoll = 0;
         private float currentSpeed = 0;
-        private float prevFOV = 0;
+        private int prevFOV = 0;
         private byte soundRotateStopDelay = 0;
         private byte soundZoomStopDelay = 0;
         private MyEntity3DSoundEmitter soundRotateEmitter = null;
         private MyEntity3DSoundEmitter soundZoomEmitter = null;
 
-        private static IMyHudNotification notification = null;
-        private static int notificationTimeoutTicks = 0;
+        private int ignoreFovChangeForTicks = 0;
+        private int notificationTimeoutTicks = 0;
+
+        private IMyHudNotification Notification => CameraPanningMod.Instance.Notification;
 
         private const float SPEED_MUL = 0.1f; // rotation input multiplier as it is too fast raw compared to the rest of the game
         private const float MAX_SPEED = 1.8f; // using a max speed to feel like it's on actual servos
@@ -157,7 +159,13 @@ namespace Digi.CameraPanning
             var lookaroundControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.LOOKAROUND);
             var rotationTypeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.SPRINT);
             var cameraModeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.CAMERA_MODE);
-            var FOV = MyAPIGateway.Session.Camera.FovWithZoom;
+            int FOV = (int)Math.Round(MathHelper.ToDegrees(MyAPIGateway.Session.Camera.FovWithZoom), 0);
+
+            if(ignoreFovChangeForTicks > 0)
+            {
+                ignoreFovChangeForTicks--;
+                prevFOV = FOV;
+            }
 
             if(!controlling) // just taken control of this camera
             {
@@ -170,17 +178,14 @@ namespace Digi.CameraPanning
 
                 Entity.SetLocalMatrix(rotatedMatrix); // restore the last view matrix
                 prevFOV = FOV;
+                ignoreFovChangeForTicks = 2;
 
-                if(notification == null)
-                    notification = MyAPIGateway.Utilities.CreateNotification("");
-
-                notification.AliveTime = 2500;
-                notification.Text = "Hold " + GetControlAssignedName(lookaroundControl) + " to pan camera, " + GetControlAssignedName(lookaroundControl) + "+" + GetControlAssignedName(rotationTypeControl) + " to change rotation type and " + GetControlAssignedName(cameraModeControl) + " to reset.";
-                notification.Show();
+                string text = "Hold " + GetControlAssignedName(lookaroundControl) + " to pan camera, " + GetControlAssignedName(lookaroundControl) + "+" + GetControlAssignedName(rotationTypeControl) + " to change rotation type and " + GetControlAssignedName(cameraModeControl) + " to reset.";
+                Notify(text, 2500);
             }
             else
             {
-                if(Math.Abs(FOV - prevFOV) > 0.05f)
+                if(Math.Abs(FOV - prevFOV) > 0)
                 {
                     prevFOV = FOV;
 
@@ -190,12 +195,7 @@ namespace Digi.CameraPanning
                         soundZoomStopDelay = SOUND_ZOOM_STOP_DELAY;
                     }
 
-                    if(notification != null)
-                    {
-                        notification.AliveTime = 300;
-                        notification.Text = Math.Round(MathHelper.ToDegrees(FOV), 0) + "°";
-                        notification.Show();
-                    }
+                    Notify(FOV.ToString("0°"), 300);
                 }
                 else
                 {
@@ -220,7 +220,7 @@ namespace Digi.CameraPanning
                     if(notificationTimeoutTicks > 0)
                     {
                         notificationTimeoutTicks = 0;
-                        notification.Hide();
+                        Notification.Hide();
                     }
 
                     var rot = MyAPIGateway.Input.GetRotation();
@@ -272,6 +272,19 @@ namespace Digi.CameraPanning
             }
 
             return false;
+        }
+
+        private void Notify(string text, int aliveTimeMs)
+        {
+            var notification = CameraPanningMod.Instance.Notification;
+
+            if(notification == null)
+                notification = CameraPanningMod.Instance.Notification = MyAPIGateway.Utilities.CreateNotification("");
+
+            notification.Hide();
+            notification.AliveTime = aliveTimeMs;
+            notification.Text = text;
+            notification.Show();
         }
 
         private float ClampAngle(float value, float limit = 0)

@@ -5,63 +5,50 @@ using Sandbox.Game;
 using Sandbox.ModAPI;
 using VRage.Game;
 using VRage.Game.Components;
+using VRage.Game.ModAPI;
 using VRageMath;
 
 namespace Digi.CameraPanning
 {
-    [MySessionComponentDescriptor(MyUpdateOrder.AfterSimulation)]
+    [MySessionComponentDescriptor(MyUpdateOrder.NoUpdate)]
     public class CameraPanningMod : MySessionComponentBase
     {
-        public override void LoadData()
-        {
-            instance = this;
-            Log.SetUp("Camera Panning", WORKSHOPID, "CameraPanning");
-        }
+        public static CameraPanningMod Instance = null;
+        public IMyHudNotification Notification;
 
-        public static CameraPanningMod instance = null;
-        private bool init = false;
-        private bool thirdPersonEnabled = false;
-        private float originalCameraFovSmall = 0;
-        private float originalCameraFovLarge = 0;
+        private float OriginalCameraFovSmall = 0;
+        private float OriginalCameraFovLarge = 0;
 
-        private const ulong WORKSHOPID = 806331071;
-        public const float CAMERA_FOV = (float)(100 / 180d * Math.PI); // 100 degrees in radians
+        public const float CAMERA_NEW_MAX_FOV = (float)(100 / 180d * Math.PI); // 100 degrees in radians
         public readonly MyDefinitionId CAMERA_SMALL_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "SmallCameraBlock");
         public readonly MyDefinitionId CAMERA_LARGE_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "LargeCameraBlock");
 
-        public override void UpdateAfterSimulation()
+        public override void LoadData()
         {
-            if(init)
-                return;
+            Instance = this;
+            Log.ModName = "Camera Panning";
+            Log.AutoClose = false;
+        }
 
+        public override void BeforeStart()
+        {
             try
             {
-                if(MyAPIGateway.Session == null)
-                    return;
-
-                init = true;
-                Log.Init();
-
-                thirdPersonEnabled = MyAPIGateway.Session.SessionSettings.Enable3rdPersonView;
-
                 var def = GetCameraDefinition(CAMERA_SMALL_ID);
 
                 if(def != null)
                 {
-                    originalCameraFovSmall = def.MaxFov;
-                    def.MaxFov = CAMERA_FOV;
+                    OriginalCameraFovSmall = def.MaxFov;
+                    def.MaxFov = CAMERA_NEW_MAX_FOV;
                 }
 
                 def = GetCameraDefinition(CAMERA_LARGE_ID);
 
                 if(def != null)
                 {
-                    originalCameraFovLarge = def.MaxFov;
-                    def.MaxFov = CAMERA_FOV;
+                    OriginalCameraFovLarge = def.MaxFov;
+                    def.MaxFov = CAMERA_NEW_MAX_FOV;
                 }
-
-                // SetUpdateOrder() throws an exception if called in the update method; this to overcomes that
-                MyAPIGateway.Utilities.InvokeOnGameThread(() => SetUpdateOrder(MyUpdateOrder.NoUpdate));
             }
             catch(Exception e)
             {
@@ -73,9 +60,10 @@ namespace Digi.CameraPanning
         {
             try
             {
-                if(!init || thirdPersonEnabled || MyAPIGateway.Gui.IsCursorVisible || MyAPIGateway.Gui.ChatEntryVisible)
+                if(MyAPIGateway.Gui.IsCursorVisible || MyAPIGateway.Gui.ChatEntryVisible)
                     return;
 
+                // Reset view when forced in first person by pressing the camera key
                 if(MyAPIGateway.Input.IsNewGameControlPressed(MyControlsSpace.CAMERA_MODE))
                 {
                     var camCtrl = MyAPIGateway.Session.CameraController;
@@ -84,16 +72,19 @@ namespace Digi.CameraPanning
                     if(camCtrl == null || controller == null)
                         return;
 
-                    if(controller is IMyShipController)
+                    if(!MyAPIGateway.Session.SessionSettings.Enable3rdPersonView || controller.ForceFirstPersonCamera)
                     {
-                        // HACK this is how MyCockpit.Rotate() does things so I kinda have to use these magic numbers.
-                        var num = MyAPIGateway.Input.GetMouseSensitivity() * 0.13f;
-                        camCtrl.Rotate(new Vector2(controller.HeadLocalXAngle / num, controller.HeadLocalYAngle / num), 0);
-                    }
-                    else
-                    {
-                        // HACK this is how MyCharacter.RotateHead() does things so I kinda have to use these magic numbers.
-                        camCtrl.Rotate(new Vector2(controller.HeadLocalXAngle * 2, controller.HeadLocalYAngle * 2), 0);
+                        if(controller is IMyShipController)
+                        {
+                            // HACK this is how MyCockpit.Rotate() does things so I kinda have to use these magic numbers.
+                            var num = MyAPIGateway.Input.GetMouseSensitivity() * 0.13f;
+                            camCtrl.Rotate(new Vector2(controller.HeadLocalXAngle / num, controller.HeadLocalYAngle / num), 0);
+                        }
+                        else
+                        {
+                            // HACK this is how MyCharacter.RotateHead() does things so I kinda have to use these magic numbers.
+                            camCtrl.Rotate(new Vector2(controller.HeadLocalXAngle * 2, controller.HeadLocalYAngle * 2), 0);
+                        }
                     }
                 }
             }
@@ -111,19 +102,19 @@ namespace Digi.CameraPanning
                 var def = GetCameraDefinition(CAMERA_SMALL_ID);
 
                 if(def != null)
-                    def.MaxFov = originalCameraFovSmall;
+                    def.MaxFov = OriginalCameraFovSmall;
 
                 def = GetCameraDefinition(CAMERA_LARGE_ID);
 
                 if(def != null)
-                    def.MaxFov = originalCameraFovLarge;
+                    def.MaxFov = OriginalCameraFovLarge;
             }
             catch(Exception e)
             {
                 Log.Error(e);
             }
 
-            instance = null;
+            Instance = null;
             Log.Close();
         }
 
