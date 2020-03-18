@@ -116,7 +116,7 @@ namespace Digi.CameraPanning
                 def = GetCameraDefinition(CAMERA_LARGE_ID);
 
                 if(def != null)
-                    def.MaxFov = originalCameraFovSmall;
+                    def.MaxFov = originalCameraFovLarge;
             }
             catch(Exception e)
             {
