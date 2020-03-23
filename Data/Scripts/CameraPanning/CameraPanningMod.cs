@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Definitions;
 using Sandbox.Game;
@@ -34,25 +35,30 @@ namespace Digi.CameraPanning
         {
             try
             {
-                var def = GetCameraDefinition(CAMERA_SMALL_ID);
-
-                if(def != null)
-                {
-                    OriginalCameraFovSmall = def.MaxFov;
-                    def.MaxFov = CAMERA_NEW_MAX_FOV;
-                }
-
-                def = GetCameraDefinition(CAMERA_LARGE_ID);
-
-                if(def != null)
-                {
-                    OriginalCameraFovLarge = def.MaxFov;
-                    def.MaxFov = CAMERA_NEW_MAX_FOV;
-                }
+                EditVanillaMaxFov();
             }
             catch(Exception e)
             {
                 Log.Error(e);
+            }
+        }
+
+        private void EditVanillaMaxFov()
+        {
+            var def = GetCameraDefinition(CAMERA_SMALL_ID);
+
+            if(def != null)
+            {
+                OriginalCameraFovSmall = def.MaxFov;
+                def.MaxFov = CAMERA_NEW_MAX_FOV;
+            }
+
+            def = GetCameraDefinition(CAMERA_LARGE_ID);
+
+            if(def != null)
+            {
+                OriginalCameraFovLarge = def.MaxFov;
+                def.MaxFov = CAMERA_NEW_MAX_FOV;
             }
         }
 
@@ -63,34 +69,39 @@ namespace Digi.CameraPanning
                 if(MyAPIGateway.Gui.IsCursorVisible || MyAPIGateway.Gui.ChatEntryVisible)
                     return;
 
-                // Reset view when forced in first person by pressing the camera key
-                if(MyAPIGateway.Input.IsNewGameControlPressed(MyControlsSpace.CAMERA_MODE))
-                {
-                    var camCtrl = MyAPIGateway.Session.CameraController;
-                    var controller = MyAPIGateway.Session.ControlledObject as Sandbox.Game.Entities.IMyControllableEntity; // avoiding ambiguity
-
-                    if(camCtrl == null || controller == null)
-                        return;
-
-                    if(!MyAPIGateway.Session.SessionSettings.Enable3rdPersonView || controller.ForceFirstPersonCamera)
-                    {
-                        if(controller is IMyShipController)
-                        {
-                            // HACK this is how MyCockpit.Rotate() does things so I kinda have to use these magic numbers.
-                            var num = MyAPIGateway.Input.GetMouseSensitivity() * 0.13f;
-                            camCtrl.Rotate(new Vector2(controller.HeadLocalXAngle / num, controller.HeadLocalYAngle / num), 0);
-                        }
-                        else
-                        {
-                            // HACK this is how MyCharacter.RotateHead() does things so I kinda have to use these magic numbers.
-                            camCtrl.Rotate(new Vector2(controller.HeadLocalXAngle * 2, controller.HeadLocalYAngle * 2), 0);
-                        }
-                    }
-                }
+                HandleResetFirstPersonView();
             }
             catch(Exception e)
             {
                 Log.Error(e);
+            }
+        }
+
+        private void HandleResetFirstPersonView()
+        {
+            // Reset view when forced in first person by pressing the camera key
+            if(MyAPIGateway.Input.IsNewGameControlPressed(MyControlsSpace.CAMERA_MODE))
+            {
+                var camCtrl = MyAPIGateway.Session.CameraController;
+                var controller = MyAPIGateway.Session.ControlledObject as Sandbox.Game.Entities.IMyControllableEntity; // avoiding ambiguity
+
+                if(camCtrl == null || controller == null)
+                    return;
+
+                if(!MyAPIGateway.Session.SessionSettings.Enable3rdPersonView || controller.ForceFirstPersonCamera)
+                {
+                    if(controller is IMyShipController)
+                    {
+                        // HACK this is how MyCockpit.Rotate() does things so I kinda have to use these magic numbers.
+                        var num = MyAPIGateway.Input.GetMouseSensitivity() * 0.13f;
+                        camCtrl.Rotate(new Vector2(controller.HeadLocalXAngle / num, controller.HeadLocalYAngle / num), 0);
+                    }
+                    else
+                    {
+                        // HACK this is how MyCharacter.RotateHead() does things so I kinda have to use these magic numbers.
+                        camCtrl.Rotate(new Vector2(controller.HeadLocalXAngle * 2, controller.HeadLocalYAngle * 2), 0);
+                    }
+                }
             }
         }
 
