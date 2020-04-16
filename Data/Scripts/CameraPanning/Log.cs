@@ -14,7 +14,7 @@ namespace Digi
     /// <summary>
     /// <para>Standalone logger, does not require any setup.</para>
     /// <para>Mod name is automatically set from workshop name or folder name. Can also be manually defined using <see cref="ModName"/>.</para>
-    /// <para>Version 1.55 by Digi</para>
+    /// <para>Version 1.56 by Digi</para>
     /// </summary>
     [MySessionComponentDescriptor(MyUpdateOrder.NoUpdate, priority: int.MaxValue)]
     public class Log : MySessionComponentBase
@@ -428,6 +428,7 @@ namespace Digi
                     }
                     else
                     {
+                        notify.Hide(); // required since SE v1.194
                         notify.Text = printText;
                         notify.AliveTime = printTime;
                         notify.ResetAliveTime();
