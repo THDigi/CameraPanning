@@ -37,10 +37,15 @@ namespace Digi.CameraPanning
         private int prevFOV = 0;
         private int ignoreFovChangeForTicks = 0;
 
+        private float zoomWidth;
+        private ZoomLimits zoomLimits;
+        private MyCameraBlockDefinition blockDef;
+
         private IMyHudNotification Notification => CameraPanningMod.Instance.Notification;
 
         private const float SPEED_MUL = 0.1f; // rotation input multiplier as it is too fast raw compared to the rest of the game
         private const float MAX_SPEED = 1.8f; // using a max speed to feel like it's on actual servos
+        private const float ZOOM_DISTANCE = 1; // just for math to make sense, don't edit
         private const byte SOUND_ROTATE_STOP_DELAY = 10; // game ticks
         private const byte SOUND_ZOOM_STOP_DELAY = 30; // game ticks
         private const float SOUND_ROTATE_VOLUME = 0.5f;
@@ -69,7 +74,17 @@ namespace Digi.CameraPanning
                 if(block.CubeGrid.IsPreview || block.CubeGrid.Physics == null) // ignore ghost grids
                     return;
 
+                blockDef = (MyCameraBlockDefinition)block.BlockDefinition;
+
+                if(!CameraPanningMod.Instance.WidthLimits.TryGetValue(blockDef.Id, out zoomLimits))
+                {
+                    Log.Error($"{blockDef.Id.ToString()} didn't exist at BeforeStart() time so it has no stored limits! What is going on?!", Log.PRINT_MESSAGE);
+                    return;
+                }
+
                 NeedsUpdate = MyEntityUpdateEnum.EACH_FRAME;
+
+                zoomWidth = FovToWidth(MathHelper.ToRadians(60));
 
                 originalMatrix = Entity.LocalMatrix;
                 rotatedMatrix = originalMatrix;
@@ -110,6 +125,30 @@ namespace Digi.CameraPanning
                 Log.Error(e);
             }
         }
+
+        public void ZoomIn()
+        {
+            zoomWidth *= 0.9f;
+            UpdateZoom();
+        }
+
+        public void ZoomOut()
+        {
+            zoomWidth *= 1.1f;
+            UpdateZoom();
+        }
+
+        private void UpdateZoom()
+        {
+            zoomWidth = MathHelper.Clamp(zoomWidth, zoomLimits.MinWidth, zoomLimits.MaxWidth);
+
+            var fov = WidthToFov(zoomWidth);
+            blockDef.MinFov = fov;
+            blockDef.MaxFov = fov;
+        }
+
+        public static float FovToWidth(float fovRadians) => 2 * (float)Math.Tan(fovRadians / 2d) * ZOOM_DISTANCE;
+        public static float WidthToFov(float width) => 2 * (float)Math.Atan(width / 2 / ZOOM_DISTANCE);
 
         public override void UpdateAfterSimulation()
         {
@@ -154,6 +193,10 @@ namespace Digi.CameraPanning
                     Entity.SetLocalMatrix(originalMatrix); // reset the camera's matrix to avoid seeing its model skewed if the model gets updated with the local matrix
                     Entity.Render.UpdateRenderObject(true); // force model to be recalculated to avoid invisible models on merge/unmerge while camera is viewed
 
+                    // reset definition on exit camera for allowing mods to read proper values
+                    blockDef.MinFov = zoomLimits.MinFov;
+                    blockDef.MaxFov = zoomLimits.MaxFov;
+
                     if(soundZoomEmitter != null)
                         soundZoomEmitter.StopSound(true);
                 }
@@ -164,13 +207,15 @@ namespace Digi.CameraPanning
             var lookaroundControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.LOOKAROUND);
             var rotationTypeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.SPRINT);
             var cameraModeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.CAMERA_MODE);
-            int FOV = (int)Math.Round(MathHelper.ToDegrees(MyAPIGateway.Session.Camera.FovWithZoom), 0);
+            float FovRad = MyAPIGateway.Session.Camera.FovWithZoom;
+            int FOV = (int)Math.Round(MathHelper.ToDegrees(FovRad), 0);
 
             // takes a few ticks for view to change to camera...
             if(ignoreFovChangeForTicks > 0)
             {
                 ignoreFovChangeForTicks--;
                 prevFOV = FOV;
+                zoomWidth = FovToWidth(FovRad);
             }
 
             if(!controlling) // just taken control of this camera
@@ -187,6 +232,7 @@ namespace Digi.CameraPanning
                 Entity.SetLocalMatrix(rotatedMatrix); // restore the last view matrix
 
                 prevFOV = FOV;
+                zoomWidth = FovToWidth(FovRad);
                 ignoreFovChangeForTicks = 2;
 
                 string lookaround = GetControlAssignedName(lookaroundControl);

@@ -122,6 +122,7 @@
   <ItemGroup>
     <Compile Include="CameraBlock.cs" />
     <Compile Include="CameraPanningMod.cs" />
+    <Compile Include="ZoomLimits.cs" />
     <Compile Include="Log.cs" />
   </ItemGroup>
   <ItemGroup>

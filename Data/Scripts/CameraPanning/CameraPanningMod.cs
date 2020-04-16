@@ -16,6 +16,7 @@ namespace Digi.CameraPanning
     {
         public static CameraPanningMod Instance = null;
         public IMyHudNotification Notification;
+        public Dictionary<MyDefinitionId, ZoomLimits> WidthLimits;
 
         private float OriginalCameraFovSmall = 0;
         private float OriginalCameraFovLarge = 0;
@@ -38,6 +39,7 @@ namespace Digi.CameraPanning
                 if(!MyAPIGateway.Utilities.IsDedicated)
                 {
                     EditVanillaMaxFov();
+                    StoreFovLimits();
                 }
             }
             catch(Exception e)
@@ -65,6 +67,21 @@ namespace Digi.CameraPanning
             }
         }
 
+        private void StoreFovLimits()
+        {
+            WidthLimits = new Dictionary<MyDefinitionId, ZoomLimits>(MyDefinitionId.Comparer);
+
+            foreach(var def in MyDefinitionManager.Static.GetAllDefinitions())
+            {
+                var camDef = def as MyCameraBlockDefinition;
+
+                if(camDef != null)
+                {
+                    WidthLimits[def.Id] = new ZoomLimits(camDef.MinFov, camDef.MaxFov);
+                }
+            }
+        }
+
         public override void HandleInput()
         {
             try
@@ -72,11 +89,32 @@ namespace Digi.CameraPanning
                 if(MyAPIGateway.Utilities.IsDedicated || MyAPIGateway.Gui.IsCursorVisible || MyAPIGateway.Gui.ChatEntryVisible)
                     return;
 
+                HandleCameraZoom();
                 HandleResetFirstPersonView();
             }
             catch(Exception e)
             {
                 Log.Error(e);
+            }
+        }
+
+        private void HandleCameraZoom()
+        {
+            var cameraBlock = MyAPIGateway.Session?.CameraController as IMyCameraBlock;
+            var logic = cameraBlock?.GameLogic?.GetAs<CameraBlock>();
+
+            if(logic != null)
+            {
+                int scroll = MyAPIGateway.Input.DeltaMouseScrollWheelValue();
+
+                if(scroll > 0)
+                {
+                    logic.ZoomIn();
+                }
+                else if(scroll < 0)
+                {
+                    logic.ZoomOut();
+                }
             }
         }
 
