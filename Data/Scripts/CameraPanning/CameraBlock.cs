@@ -284,7 +284,7 @@ namespace Digi.CameraPanning
             if(notification == null)
                 notification = CameraPanningMod.Instance.Notification = MyAPIGateway.Utilities.CreateNotification("");
 
-            notification.Hide();
+            notification.Hide(); // required since SE v1.194
             notification.AliveTime = aliveTimeMs;
             notification.Text = text;
             notification.Show();
