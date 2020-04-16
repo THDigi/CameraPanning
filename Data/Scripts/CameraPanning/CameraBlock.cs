@@ -19,21 +19,23 @@ namespace Digi.CameraPanning
     {
         private bool controlling = false;
         private bool recenter = false;
+
         private Matrix originalMatrix;
         private Matrix rotatedMatrix;
         private Vector3 positionOffset;
+
         private float currentPitch = 0;
         private float currentYaw = 0;
         private float currentRoll = 0;
         private float currentSpeed = 0;
-        private int prevFOV = 0;
+
         private byte soundRotateStopDelay = 0;
         private byte soundZoomStopDelay = 0;
         private MyEntity3DSoundEmitter soundRotateEmitter = null;
         private MyEntity3DSoundEmitter soundZoomEmitter = null;
 
+        private int prevFOV = 0;
         private int ignoreFovChangeForTicks = 0;
-        private int notificationTimeoutTicks = 0;
 
         private IMyHudNotification Notification => CameraPanningMod.Instance.Notification;
 
@@ -49,6 +51,9 @@ namespace Digi.CameraPanning
 
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
+            if(MyAPIGateway.Utilities.IsDedicated)
+                return; // DS doesn't need any of this
+
             NeedsUpdate = MyEntityUpdateEnum.BEFORE_NEXT_FRAME;
         }
 
@@ -143,7 +148,7 @@ namespace Digi.CameraPanning
                 if(controlling) // if it was being controlled, restore the local matrix, stop sounds, etc
                 {
                     controlling = false;
-                    notificationTimeoutTicks = 150; // (int)((notification.AliveTime / 1000f) * 60f)
+                    Notification.Hide();
 
                     //Entity.Render.Visible = true; // restore camera model
                     Entity.SetLocalMatrix(originalMatrix); // reset the camera's matrix to avoid seeing its model skewed if the model gets updated with the local matrix
@@ -156,14 +161,12 @@ namespace Digi.CameraPanning
                 return false; // not controlled, no need to update further
             }
 
-            if(notificationTimeoutTicks > 0)
-                notificationTimeoutTicks--;
-
             var lookaroundControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.LOOKAROUND);
             var rotationTypeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.SPRINT);
             var cameraModeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.CAMERA_MODE);
             int FOV = (int)Math.Round(MathHelper.ToDegrees(MyAPIGateway.Session.Camera.FovWithZoom), 0);
 
+            // takes a few ticks for view to change to camera...
             if(ignoreFovChangeForTicks > 0)
             {
                 ignoreFovChangeForTicks--;
@@ -174,12 +177,15 @@ namespace Digi.CameraPanning
             {
                 controlling = true; // only show this message once per camera control
 
-                //Entity.Render.Visible = false; // hide the camera model to avoid weirdness
+                // hide the camera model to avoid weirdness...
+                // but disabled to allow mods to model things in view with their camera model.
+                //Entity.Render.Visible = false;
 
                 originalMatrix = Entity.LocalMatrix; // recalculate original matrix and rotated matrix in case the block was "moved" (by merge or who knows what else)
                 RotateCamera(0, 0, 0, true);
 
                 Entity.SetLocalMatrix(rotatedMatrix); // restore the last view matrix
+
                 prevFOV = FOV;
                 ignoreFovChangeForTicks = 2;
 
@@ -224,11 +230,8 @@ namespace Digi.CameraPanning
 
                 if(lookaroundControl.IsPressed())
                 {
-                    if(notificationTimeoutTicks > 0)
-                    {
-                        notificationTimeoutTicks = 0;
+                    if(Notification.Text.Length > 10) // if it's the control hints, hide it
                         Notification.Hide();
-                    }
 
                     var rot = MyAPIGateway.Input.GetRotation();
                     bool rollToggle = rotationTypeControl.IsPressed();
