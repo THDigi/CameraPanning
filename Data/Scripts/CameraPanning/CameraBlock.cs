@@ -183,8 +183,12 @@ namespace Digi.CameraPanning
                 prevFOV = FOV;
                 ignoreFovChangeForTicks = 2;
 
-                string text = "Hold " + GetControlAssignedName(lookaroundControl) + " to pan camera, " + GetControlAssignedName(lookaroundControl) + "+" + GetControlAssignedName(rotationTypeControl) + " to change rotation type and " + GetControlAssignedName(cameraModeControl) + " to reset.";
-                Notify(text, 2500);
+                string lookaround = GetControlAssignedName(lookaroundControl);
+                string rotationType = GetControlAssignedName(rotationTypeControl);
+                string cameraMode = GetControlAssignedName(cameraModeControl);
+                string text = $"Hold [{lookaround}] to pan camera, [{lookaround}]+[{rotationType}] to change rotation type and [{cameraMode}] to reset.";
+
+                Notify(text, 3000);
             }
             else
             {
