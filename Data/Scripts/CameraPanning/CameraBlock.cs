@@ -56,6 +56,9 @@ namespace Digi.CameraPanning
         {
             try
             {
+                if(MyAPIGateway.Utilities.IsDedicated)
+                    return; // DS doesn't need any of this
+
                 var block = (MyCubeBlock)Entity;
 
                 if(block.CubeGrid.IsPreview || block.CubeGrid.Physics == null) // ignore ghost grids

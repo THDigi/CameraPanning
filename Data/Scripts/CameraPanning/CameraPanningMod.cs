@@ -35,7 +35,10 @@ namespace Digi.CameraPanning
         {
             try
             {
-                EditVanillaMaxFov();
+                if(!MyAPIGateway.Utilities.IsDedicated)
+                {
+                    EditVanillaMaxFov();
+                }
             }
             catch(Exception e)
             {
@@ -66,7 +69,7 @@ namespace Digi.CameraPanning
         {
             try
             {
-                if(MyAPIGateway.Gui.IsCursorVisible || MyAPIGateway.Gui.ChatEntryVisible)
+                if(MyAPIGateway.Utilities.IsDedicated || MyAPIGateway.Gui.IsCursorVisible || MyAPIGateway.Gui.ChatEntryVisible)
                     return;
 
                 HandleResetFirstPersonView();
@@ -109,16 +112,19 @@ namespace Digi.CameraPanning
         {
             try
             {
-                // restore original FOV for camera definitions as they are not reloaded in between world loads which means removing the mod will not reset the FOV.
-                var def = GetCameraDefinition(CAMERA_SMALL_ID);
+                if(!MyAPIGateway.Utilities.IsDedicated)
+                {
+                    // restore original FOV for camera definitions as they are not reloaded in between world loads which means removing the mod will not reset the FOV.
+                    var def = GetCameraDefinition(CAMERA_SMALL_ID);
 
-                if(def != null)
-                    def.MaxFov = OriginalCameraFovSmall;
+                    if(def != null)
+                        def.MaxFov = OriginalCameraFovSmall;
 
-                def = GetCameraDefinition(CAMERA_LARGE_ID);
+                    def = GetCameraDefinition(CAMERA_LARGE_ID);
 
-                if(def != null)
-                    def.MaxFov = OriginalCameraFovLarge;
+                    if(def != null)
+                        def.MaxFov = OriginalCameraFovLarge;
+                }
             }
             catch(Exception e)
             {
