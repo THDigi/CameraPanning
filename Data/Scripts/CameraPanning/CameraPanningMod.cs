@@ -103,7 +103,7 @@ namespace Digi.CameraPanning
             var cameraBlock = MyAPIGateway.Session?.CameraController as IMyCameraBlock;
             var logic = cameraBlock?.GameLogic?.GetAs<CameraBlock>();
 
-            if(logic != null)
+            if(logic != null && logic.IsValid)
             {
                 int scroll = MyAPIGateway.Input.DeltaMouseScrollWheelValue();
 

@@ -17,6 +17,7 @@ namespace Digi.CameraPanning
     [MyEntityComponentDescriptor(typeof(MyObjectBuilder_CameraBlock), useEntityUpdate: false)]
     public class CameraBlock : MyGameLogicComponent
     {
+        private MyCubeBlock block;
         private bool controlling = false;
         private bool recenter = false;
 
@@ -69,10 +70,13 @@ namespace Digi.CameraPanning
                 if(MyAPIGateway.Utilities.IsDedicated)
                     return; // DS doesn't need any of this
 
-                var block = (MyCubeBlock)Entity;
+                block = (MyCubeBlock)Entity;
 
-                if(block.CubeGrid.IsPreview || block.CubeGrid.Physics == null) // ignore ghost grids
+                if(block.IsPreview || block.CubeGrid.IsPreview || block.CubeGrid.Physics == null) // ignore ghost grids
+                {
+                    block = null;
                     return;
+                }
 
                 blockDef = (MyCameraBlockDefinition)block.BlockDefinition;
 
@@ -126,14 +130,22 @@ namespace Digi.CameraPanning
             }
         }
 
+        public bool IsValid => (block != null && block.CubeGrid.Physics.Enabled);
+
         public void ZoomIn()
         {
+            if(!IsValid)
+                return;
+
             zoomWidth *= 0.9f;
             UpdateZoom();
         }
 
         public void ZoomOut()
         {
+            if(!IsValid)
+                return;
+
             zoomWidth *= 1.1f;
             UpdateZoom();
         }
@@ -154,6 +166,9 @@ namespace Digi.CameraPanning
         {
             try
             {
+                if(!IsValid)
+                    return;
+
                 bool rotating = Update(); // returns true if the camera is rotating, false otherwise
 
                 if(soundRotateEmitter != null)
