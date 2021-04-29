@@ -410,32 +410,26 @@ namespace Digi.CameraPanning
             return false;
         }
 
-        private MyCubeBlockDefinition.MountPoint GetDefaultMountPoint(MyCubeBlock block)
-        {
-            var mountPoints = block.BlockDefinition.MountPoints;
-
-            for(int i = 0; i < mountPoints.Length; i++)
-            {
-                var mount = mountPoints[i];
-
-                if(mount.Enabled && mount.Default)
-                    return mount;
-            }
-
-            if(mountPoints.Length > 0) // if none have the Default property set, the first one is assumed the default one
-                return mountPoints[0];
-
-            return default(MyCubeBlockDefinition.MountPoint);
-        }
-
         private void TryFixCameraPosition()
         {
-            var block = (MyCubeBlock)Entity;
-            var mount = GetDefaultMountPoint(block);
+            // ignore mods and blocks that use ModelOffset
 
-            if(block.BlockDefinition.ModelOffset.LengthSquared() <= EPSILON) // ignore mods that have model offset because that also moves camera position
+            var block = (MyCubeBlock)Entity;
+            if(block.BlockDefinition.Context.IsBaseGame && block.BlockDefinition.ModelOffset.LengthSquared() <= EPSILON)
             {
-                positionOffset = Vector3.TransformNormal((Vector3)mount.Normal, originalMatrix) * ((block.CubeGrid.GridSize / 2f) - 0.05f);
+                Vector3 offsetDir = Vector3.Backward;
+                //var mountPoints = block.BlockDefinition.MountPoints;
+                //for(int i = 0; i < mountPoints.Length; i++)
+                //{
+                //    var mount = mountPoints[i];
+                //    if(mount.Enabled && mount.Default)
+                //    {
+                //        offsetDir = (Vector3)mount.Normal;
+                //        break;
+                //    }
+                //}
+
+                positionOffset = Vector3.TransformNormal(offsetDir, originalMatrix) * ((block.CubeGrid.GridSize / 2f) - 0.05f);
                 rotatedMatrix.Translation = originalMatrix.Translation + positionOffset;
             }
         }
