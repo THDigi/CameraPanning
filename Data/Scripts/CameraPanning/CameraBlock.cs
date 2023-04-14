@@ -351,9 +351,9 @@ namespace Digi.CameraPanning
             IMyCameraBlock camera = (IMyCameraBlock)Block;
             float angleLimit = camera.RaycastConeLimit;
 
-            pitchMod = MathHelper.Clamp(pitchMod, -RotationMaxSpeed, RotationMaxSpeed);
-            yawMod = MathHelper.Clamp(yawMod, -RotationMaxSpeed, RotationMaxSpeed);
-            rollMod = MathHelper.Clamp(rollMod, -RotationMaxSpeed, RotationMaxSpeed);
+            //pitchMod = MathHelper.Clamp(pitchMod, -RotationMaxSpeed, RotationMaxSpeed);
+            //yawMod = MathHelper.Clamp(yawMod, -RotationMaxSpeed, RotationMaxSpeed);
+            //rollMod = MathHelper.Clamp(rollMod, -RotationMaxSpeed, RotationMaxSpeed);
 
             float setPitch = ClampAngle(CurrentPitch - pitchMod, angleLimit);
             float setYaw = ClampAngle(CurrentYaw - yawMod, angleLimit);
