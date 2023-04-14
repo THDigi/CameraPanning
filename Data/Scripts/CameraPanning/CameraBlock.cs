@@ -6,7 +6,6 @@ using Sandbox.Game;
 using Sandbox.Game.Entities;
 using Sandbox.ModAPI;
 using VRage.Game.Components;
-using VRage.Game.Entity;
 using VRage.Game.ModAPI;
 using VRage.Input;
 using VRage.ModAPI;
@@ -18,43 +17,11 @@ namespace Digi.CameraPanning
     [MyEntityComponentDescriptor(typeof(MyObjectBuilder_CameraBlock), useEntityUpdate: false)]
     public class CameraBlock : MyGameLogicComponent
     {
-        MyCubeBlock block;
-        bool controlling = false;
-        bool recenter = false;
+        public CameraClientside Client;
 
-        Matrix OriginalMatrix;
-        Matrix RotatedMatrix;
-        Vector3 CustomOffset;
-        Vector3 OriginalWorldOffsetAsLocal;
-
-        float currentPitch = 0;
-        float currentYaw = 0;
-        float currentRoll = 0;
-        float currentSpeed = 0;
-
-        int soundRotateStopDelay = 0;
-        int soundZoomStopDelay = 0;
-        MyEntity3DSoundEmitter soundRotateEmitter = null;
-        MyEntity3DSoundEmitter soundZoomEmitter = null;
-
-        int prevFOV = 0;
-        int ignoreFovChangeForTicks = 0;
-
-        float zoomWidth;
-        ZoomLimits zoomLimits;
-        MyCameraBlockDefinition blockDef;
-
-        IMyHudNotification Notification => CameraPanningMod.Instance.Notification;
-
-        const float SPEED_MUL = 0.1f; // rotation input multiplier as it is too fast raw compared to the rest of the game
-        const float MAX_SPEED = 2f; // using a max speed to feel like it's on actual servos
-        const float ZOOM_DISTANCE = 1; // just for math to make sense, don't edit
-        const int SOUND_ZOOM_STOP_DELAY = 30; // game ticks
-        const float SOUND_ROTATE_VOLUME = 1.0f;
-        const float SOUND_ZOOM_VOLUME = 0.35f;
-        static readonly MySoundPair SOUND_ROTATE_PAIR = new MySoundPair("ArcBlockRotor");
-        static readonly MySoundPair SOUND_ZOOM_PAIR = new MySoundPair("ArcWepShipGatlingRotation");
-        const float EPSILON = 0.0001f;
+        public static float FovToWidth(float fovRadians) => 2 * (float)Math.Tan(fovRadians / 2d) * ZoomDistance;
+        public static float WidthToFov(float width) => 2 * (float)Math.Atan(width / 2 / ZoomDistance);
+        const float ZoomDistance = 1; // just for math to make sense
 
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
@@ -71,46 +38,11 @@ namespace Digi.CameraPanning
                 if(MyAPIGateway.Utilities.IsDedicated)
                     return; // DS doesn't need any of this
 
-                block = (MyCubeBlock)Entity;
+                MyCubeBlock block = Entity as MyCubeBlock;
+                if(block == null || block.IsPreview || block.CubeGrid.IsPreview || block.CubeGrid.Physics == null)
+                    return; // ignore ghost grids
 
-                if(block.IsPreview || block.CubeGrid.IsPreview || block.CubeGrid.Physics == null) // ignore ghost grids
-                {
-                    block = null;
-                    return;
-                }
-
-                blockDef = (MyCameraBlockDefinition)block.BlockDefinition;
-
-                if(!CameraPanningMod.Instance.WidthLimits.TryGetValue(blockDef.Id, out zoomLimits))
-                {
-                    Log.Error($"{blockDef.Id.ToString()} didn't exist at BeforeStart() time so it has no stored limits! What is going on?!", Log.PRINT_MESSAGE);
-                    return;
-                }
-
-                NeedsUpdate = MyEntityUpdateEnum.EACH_FRAME;
-
-                zoomWidth = FovToWidth(MathHelper.ToRadians(60));
-
-                OriginalMatrix = Entity.LocalMatrix;
-                RotatedMatrix = OriginalMatrix;
-
-                Vector3D worldViewPosition = MatrixD.Invert(block.GetViewMatrix()).Translation;
-                OriginalWorldOffsetAsLocal = Vector3D.Transform(worldViewPosition, MatrixD.Invert(block.WorldMatrix)); // to local
-
-                // HACK temporary fix for camera being in the center of the block
-                TryFixCameraPosition(); // moves the camera view's position towards the default mount point by gridSize/2.
-
-                if(soundRotateEmitter == null)
-                {
-                    soundRotateEmitter = new MyEntity3DSoundEmitter((MyEntity)Entity);
-                    soundRotateEmitter.CustomVolume = SOUND_ROTATE_VOLUME;
-                }
-
-                if(soundZoomEmitter == null)
-                {
-                    soundZoomEmitter = new MyEntity3DSoundEmitter((MyEntity)Entity);
-                    soundZoomEmitter.CustomVolume = SOUND_ZOOM_VOLUME;
-                }
+                Client = new CameraClientside(this);
             }
             catch(Exception e)
             {
@@ -122,11 +54,7 @@ namespace Digi.CameraPanning
         {
             try
             {
-                if(soundRotateEmitter != null)
-                    soundRotateEmitter.StopSound(true, true);
-
-                if(soundZoomEmitter != null)
-                    soundZoomEmitter.StopSound(true, true);
+                Client?.Close();
             }
             catch(Exception e)
             {
@@ -134,214 +62,283 @@ namespace Digi.CameraPanning
             }
         }
 
-        public bool IsValid => (block != null && block.CubeGrid.Physics.Enabled);
+        public void HandleZoom()
+        {
+            if(Client == null || !Client.IsValid)
+                return;
+
+            int scroll = MyAPIGateway.Input.DeltaMouseScrollWheelValue();
+
+            if(scroll > 0)
+            {
+                Client.ZoomIn();
+            }
+            else if(scroll < 0)
+            {
+                Client.ZoomOut();
+            }
+        }
+    }
+
+    public class CameraClientside
+    {
+        readonly CameraBlock Logic;
+        readonly MyCubeBlock Block;
+        readonly ZoomLimits ZoomLimits;
+        readonly MyCameraBlockDefinition BlockDef;
+
+        readonly MyEntity3DSoundEmitter SoundRotateEmitter;
+        readonly MyEntity3DSoundEmitter SoundZoomEmitter;
+
+        Matrix OriginalMatrix;
+        Matrix RotatedMatrix;
+        Vector3 CustomOffset;
+        Vector3 OriginalWorldOffsetAsLocal;
+
+        bool Recenter = false;
+        float CurrentPitch = 0;
+        float CurrentYaw = 0;
+        float CurrentRoll = 0;
+        float CurrentSpeed = 0;
+
+        int SoundRotateStopDelay = 0;
+        int SoundZoomStopDelay = 0;
+
+        int PrevFOV = 0;
+        int IgnoreFovChangeForTicks = 0;
+
+        float ZoomWidth;
+
+        const float Epsilon = 0.0001f;
+        const float RotationSpeedMul = 0.075f; // rotation input multiplier as it is too fast raw compared to the rest of the game
+        const float RotationMaxSpeed = 2f; // using a max speed to feel like it's on actual servos
+        const int ZoomSoundDelay = 30; // game ticks
+        const float RotateSoundVolume = 1.0f;
+        const float ZoomSoundVolume = 0.35f;
+        static readonly MySoundPair RotateSound = new MySoundPair("ArcBlockRotor");
+        static readonly MySoundPair ZoomSound = new MySoundPair("ArcWepShipGatlingRotation");
+
+        public CameraClientside(CameraBlock logic)
+        {
+            Logic = logic;
+            Block = (MyCubeBlock)Logic.Entity;
+            BlockDef = (MyCameraBlockDefinition)Block.BlockDefinition;
+
+            if(!CameraPanningMod.Instance.WidthLimits.TryGetValue(BlockDef.Id, out ZoomLimits))
+            {
+                Log.Error($"{BlockDef.Id.ToString()} didn't exist at BeforeStart() time so it has no stored limits! What is going on?!", Log.PRINT_MESSAGE);
+                return;
+            }
+
+            ZoomWidth = CameraBlock.FovToWidth(MathHelper.ToRadians(60));
+
+            OriginalMatrix = Block.PositionComp.LocalMatrixRef;
+            RotatedMatrix = OriginalMatrix;
+
+            Vector3D worldViewPosition = MatrixD.Invert(Block.GetViewMatrix()).Translation;
+            OriginalWorldOffsetAsLocal = Vector3D.Transform(worldViewPosition, MatrixD.Invert(Block.WorldMatrix)); // to local
+
+            // HACK temporary fix for camera being in the center of the block
+            TryFixCameraPosition(); // moves the camera view's position towards the default mount point by gridSize/2.
+
+            SoundRotateEmitter = new MyEntity3DSoundEmitter(Block);
+            SoundRotateEmitter.CustomVolume = RotateSoundVolume;
+
+            SoundZoomEmitter = new MyEntity3DSoundEmitter(Block);
+            SoundZoomEmitter.CustomVolume = ZoomSoundVolume;
+        }
+
+        public void Close()
+        {
+            if(SoundRotateEmitter != null)
+                SoundRotateEmitter.StopSound(true, true);
+
+            if(SoundZoomEmitter != null)
+                SoundZoomEmitter.StopSound(true, true);
+        }
+
+        public bool IsValid => (Block != null && Block.CubeGrid.Physics.Enabled);
 
         public void ZoomIn()
         {
-            if(!IsValid)
-                return;
-
-            zoomWidth *= 0.9f;
+            ZoomWidth *= 0.9f;
             UpdateZoom();
         }
 
         public void ZoomOut()
         {
-            if(!IsValid)
-                return;
-
-            zoomWidth *= 1.1f;
+            ZoomWidth *= 1.1f;
             UpdateZoom();
         }
 
         void UpdateZoom()
         {
-            zoomWidth = MathHelper.Clamp(zoomWidth, zoomLimits.MinWidth, zoomLimits.MaxWidth);
+            ZoomWidth = MathHelper.Clamp(ZoomWidth, ZoomLimits.MinWidth, ZoomLimits.MaxWidth);
 
-            float fov = WidthToFov(zoomWidth);
-            blockDef.MinFov = fov;
-            blockDef.MaxFov = fov;
+            float fov = CameraBlock.WidthToFov(ZoomWidth);
+            BlockDef.MinFov = fov;
+            BlockDef.MaxFov = fov;
         }
 
-        public static float FovToWidth(float fovRadians) => 2 * (float)Math.Tan(fovRadians / 2d) * ZOOM_DISTANCE;
-        public static float WidthToFov(float width) => 2 * (float)Math.Atan(width / 2 / ZOOM_DISTANCE);
-
-        public override void UpdateAfterSimulation()
+        public void Update()
         {
-            try
+            //if(!IsValid)
+            if(!(Block != null && Block.CubeGrid.Physics.Enabled))
+                return;
+
+            bool rotating = UpdateCamera(); // returns true if the camera is rotating, false otherwise
+
+            if(SoundRotateEmitter != null)
             {
-                if(!IsValid)
-                    return;
+                if(rotating && SoundRotateStopDelay > 0) // reset the stop delay
+                    SoundRotateStopDelay = 0;
 
-                bool rotating = Update(); // returns true if the camera is rotating, false otherwise
+                if(SoundRotateEmitter.IsPlaying) // dynamically adjust sound volume depending on last rotation speed
+                    SoundRotateEmitter.CustomVolume = RotateSoundVolume * MathHelper.Clamp(CurrentSpeed / RotationMaxSpeed, 0, 1);
 
-                if(soundRotateEmitter != null)
+                if(!rotating && SoundRotateEmitter != null && SoundRotateEmitter.IsPlaying)
                 {
-                    if(rotating && soundRotateStopDelay > 0) // reset the stop delay
-                        soundRotateStopDelay = 0;
+                    if(SoundRotateStopDelay == 0)
+                        SoundRotateStopDelay = ZoomSoundDelay;
 
-                    if(soundRotateEmitter.IsPlaying) // dynamically adjust sound volume depending on last rotation speed
-                        soundRotateEmitter.CustomVolume = 0.2f + (MathHelper.Clamp(currentSpeed / MAX_SPEED, 0, 1) * 0.6f);
-
-                    if(!rotating && soundRotateEmitter != null && soundRotateEmitter.IsPlaying)
-                    {
-                        if(soundRotateStopDelay == 0)
-                            soundRotateStopDelay = SOUND_ZOOM_STOP_DELAY;
-
-                        if(--soundRotateStopDelay == 0)
-                            soundRotateEmitter.StopSound(true);
-                    }
+                    if(--SoundRotateStopDelay == 0)
+                        SoundRotateEmitter.StopSound(true);
                 }
-            }
-            catch(Exception e)
-            {
-                Log.Error(e);
             }
         }
 
-        bool Update()
+        public void EnterView()
         {
-            if(MyAPIGateway.Session.CameraController != Entity)
-            {
-                if(controlling) // if it was being controlled, restore the local matrix, stop sounds, etc
-                {
-                    controlling = false;
-                    Notification.Hide();
+            OriginalMatrix = Block.PositionComp.LocalMatrixRef; // recalculate original matrix and rotated matrix in case the block was "moved" (by merge or who knows what else)
+            RotateCamera(0, 0, 0, true);
 
-                    //Entity.Render.Visible = true; // restore camera model
-                    Entity.SetLocalMatrix(OriginalMatrix); // reset the camera's matrix to avoid seeing its model skewed if the model gets updated with the local matrix
-                    Entity.Render.UpdateRenderObject(true); // force model to be recalculated to avoid invisible models on merge/unmerge while camera is viewed
+            float FovRad = MyAPIGateway.Session.Camera.FovWithZoom;
+            int FOV = (int)Math.Round(MathHelper.ToDegrees(FovRad), 0);
 
-                    // reset definition on exit camera for allowing mods to read proper values
-                    blockDef.MinFov = zoomLimits.MinFov;
-                    blockDef.MaxFov = zoomLimits.MaxFov;
+            PrevFOV = FOV;
+            ZoomWidth = CameraBlock.FovToWidth(FovRad);
+            IgnoreFovChangeForTicks = 2;
 
-                    if(soundZoomEmitter != null)
-                        soundZoomEmitter.StopSound(true);
-                }
+            string lookaround = GetControlAssignedName(MyAPIGateway.Input.GetGameControl(MyControlsSpace.LOOKAROUND));
+            string rotationType = GetControlAssignedName(MyAPIGateway.Input.GetGameControl(MyControlsSpace.SPRINT));
+            string cameraMode = GetControlAssignedName(MyAPIGateway.Input.GetGameControl(MyControlsSpace.CAMERA_MODE));
+            string text = $"Hold [{lookaround}] to pan camera, [{lookaround}]+[{rotationType}] to change rotation type and [{cameraMode}] to reset.";
 
-                return false; // not controlled, no need to update further
-            }
+            Notify(text, 3000);
+        }
 
-            var lookaroundControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.LOOKAROUND);
-            var rotationTypeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.SPRINT);
-            var cameraModeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.CAMERA_MODE);
+        public void ExitView()
+        {
+            CameraPanningMod.Instance.Notification.Hide();
+
+            Block.PositionComp.SetLocalMatrix(ref OriginalMatrix); // reset the camera's matrix to avoid seeing its model skewed if the model gets updated with the local matrix
+            Block.Render.UpdateRenderObject(true); // force model to be recalculated to avoid invisible models on merge/unmerge while camera is viewed
+
+            // reset definition on exit camera for allowing mods to read proper values
+            BlockDef.MinFov = ZoomLimits.MinFov;
+            BlockDef.MaxFov = ZoomLimits.MaxFov;
+
+            if(SoundZoomEmitter != null)
+                SoundZoomEmitter.StopSound(true);
+        }
+
+        bool UpdateCamera()
+        {
             float FovRad = MyAPIGateway.Session.Camera.FovWithZoom;
             int FOV = (int)Math.Round(MathHelper.ToDegrees(FovRad), 0);
 
             // takes a few ticks for view to change to camera...
-            if(ignoreFovChangeForTicks > 0)
+            if(IgnoreFovChangeForTicks > 0)
             {
-                ignoreFovChangeForTicks--;
-                prevFOV = FOV;
-                zoomWidth = FovToWidth(FovRad);
+                IgnoreFovChangeForTicks--;
+                PrevFOV = FOV;
+                ZoomWidth = CameraBlock.FovToWidth(FovRad);
             }
 
-            if(!controlling) // just taken control of this camera
+            if(Math.Abs(FOV - PrevFOV) > 0)
             {
-                controlling = true; // only show this message once per camera control
+                PrevFOV = FOV;
 
-                // hide the camera model to avoid weirdness...
-                // but disabled to allow mods to model things in view with their camera model.
-                //Entity.Render.Visible = false;
+                if(SoundZoomEmitter != null && !SoundZoomEmitter.IsPlaying)
+                {
+                    SoundZoomEmitter.PlaySound(ZoomSound, stopPrevious: true, skipIntro: true, alwaysHearOnRealistic: true, force2D: true);
+                    SoundZoomStopDelay = ZoomSoundDelay;
+                }
 
-                OriginalMatrix = Entity.LocalMatrix; // recalculate original matrix and rotated matrix in case the block was "moved" (by merge or who knows what else)
-                RotateCamera(0, 0, 0, true);
-
-                Entity.SetLocalMatrix(RotatedMatrix); // restore the last view matrix
-
-                prevFOV = FOV;
-                zoomWidth = FovToWidth(FovRad);
-                ignoreFovChangeForTicks = 2;
-
-                string lookaround = GetControlAssignedName(lookaroundControl);
-                string rotationType = GetControlAssignedName(rotationTypeControl);
-                string cameraMode = GetControlAssignedName(cameraModeControl);
-                string text = $"Hold [{lookaround}] to pan camera, [{lookaround}]+[{rotationType}] to change rotation type and [{cameraMode}] to reset.";
-
-                Notify(text, 3000);
+                Notify(FOV.ToString("0°"), 300);
             }
             else
             {
-                if(Math.Abs(FOV - prevFOV) > 0)
+                if(SoundZoomEmitter != null && SoundZoomEmitter.IsPlaying)
                 {
-                    prevFOV = FOV;
-
-                    if(soundZoomEmitter != null && !soundZoomEmitter.IsPlaying)
-                    {
-                        soundZoomEmitter.PlaySound(SOUND_ZOOM_PAIR, stopPrevious: true, skipIntro: true, alwaysHearOnRealistic: true, force2D: true);
-                        soundZoomStopDelay = SOUND_ZOOM_STOP_DELAY;
-                    }
-
-                    Notify(FOV.ToString("0°"), 300);
-                }
-                else
-                {
-                    if(soundZoomEmitter != null && soundZoomEmitter.IsPlaying)
-                    {
-                        if(soundZoomStopDelay == 0 || --soundZoomStopDelay == 0)
-                            soundZoomEmitter.StopSound(true);
-                    }
+                    if(SoundZoomStopDelay == 0 || --SoundZoomStopDelay == 0)
+                        SoundZoomEmitter.StopSound(true);
                 }
             }
 
             if(!MyAPIGateway.Gui.ChatEntryVisible && !MyAPIGateway.Gui.IsCursorVisible)
             {
-                if(!recenter && cameraModeControl.IsNewPressed())
+                IMyControl lookaroundControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.LOOKAROUND);
+                IMyControl rotationTypeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.SPRINT);
+                IMyControl cameraModeControl = MyAPIGateway.Input.GetGameControl(MyControlsSpace.CAMERA_MODE);
+
+                if(!Recenter && cameraModeControl.IsNewPressed())
                 {
-                    recenter = true;
+                    Recenter = true;
                     return false; // no reason to compute further
                 }
 
                 if(lookaroundControl.IsPressed())
                 {
-                    if(Notification.Text.Length > 10) // if it's the control hints, hide it
-                        Notification.Hide();
+                    IMyHudNotification notif = CameraPanningMod.Instance.Notification;
+                    if(notif.Text.Length > 10) // if it's the control hints, hide it
+                        notif.Hide();
 
-                    var rot = MyAPIGateway.Input.GetRotation();
+                    Vector2 rot = MyAPIGateway.Input.GetRotation();
                     bool rollToggle = rotationTypeControl.IsPressed();
 
-                    if(Math.Abs(rot.X) > EPSILON || Math.Abs(rot.Y) > EPSILON)
+                    if(Math.Abs(rot.X) > Epsilon || Math.Abs(rot.Y) > Epsilon)
                     {
-                        if(recenter)
-                            recenter = false;
+                        if(Recenter)
+                            Recenter = false;
 
                         if(rollToggle)
                         {
                             // slowly reset yaw while giving control to roll
-                            if(RotateCamera(rot.X * SPEED_MUL, MathHelper.Lerp(currentYaw, 0f, 0.1f), rot.Y * SPEED_MUL))
+                            if(RotateCamera(rot.X * RotationSpeedMul, MathHelper.Lerp(CurrentYaw, 0f, 0.1f), rot.Y * RotationSpeedMul))
                                 return true;
                         }
                         else
                         {
-                            if(RotateCamera(rot.X * SPEED_MUL, rot.Y * SPEED_MUL, 0))
+                            if(RotateCamera(rot.X * RotationSpeedMul, rot.Y * RotationSpeedMul, 0))
                                 return true;
                         }
                     }
-                    else if(rollToggle && Math.Abs(currentYaw) > EPSILON) // not moving mouse but holding modifier should result in yaw being slowly reset to 0
+                    else if(rollToggle && Math.Abs(CurrentYaw) > Epsilon) // not moving mouse but holding modifier should result in yaw being slowly reset to 0
                     {
-                        if(RotateCamera(0, MathHelper.Lerp(currentYaw, 0f, 0.1f), 0))
+                        if(RotateCamera(0, MathHelper.Lerp(CurrentYaw, 0f, 0.1f), 0))
                             return true;
                     }
                 }
             }
 
-            if(recenter)
+            if(Recenter)
             {
-                if(Math.Abs(currentPitch) > EPSILON || Math.Abs(currentYaw) > EPSILON || Math.Abs(currentRoll) > EPSILON)
+                if(Math.Abs(CurrentPitch) > Epsilon || Math.Abs(CurrentYaw) > Epsilon || Math.Abs(CurrentRoll) > Epsilon)
                 {
-                    if(RotateCamera(MathHelper.Lerp(currentPitch, 0f, 0.1f), MathHelper.Lerp(currentYaw, 0f, 0.1f), MathHelper.Lerp(currentRoll, 0f, 0.1f)))
+                    if(RotateCamera(MathHelper.Lerp(CurrentPitch, 0f, 0.1f), MathHelper.Lerp(CurrentYaw, 0f, 0.1f), MathHelper.Lerp(CurrentRoll, 0f, 0.1f)))
                         return true;
                 }
                 else
                 {
-                    recenter = false;
+                    Recenter = false;
 
                     // ensure it's perfectly centered
-                    currentPitch = 0;
-                    currentYaw = 0;
-                    currentRoll = 0;
-                    Entity.SetLocalMatrix(RotatedMatrix);
+                    CurrentPitch = 0;
+                    CurrentYaw = 0;
+                    CurrentRoll = 0;
+
+                    Block.PositionComp.SetLocalMatrix(ref RotatedMatrix);
                     return true;
                 }
             }
@@ -349,59 +346,28 @@ namespace Digi.CameraPanning
             return false;
         }
 
-        void Notify(string text, int aliveTimeMs)
-        {
-            var notification = CameraPanningMod.Instance.Notification;
-
-            if(notification == null)
-                notification = CameraPanningMod.Instance.Notification = MyAPIGateway.Utilities.CreateNotification("");
-
-            notification.Hide(); // required since SE v1.194
-            notification.AliveTime = aliveTimeMs;
-            notification.Text = text;
-            notification.Show();
-        }
-
-        float ClampAngle(float value, float limit = 0)
-        {
-            if(limit > 0)
-                value = MathHelper.Clamp(value, -limit, limit);
-
-            if(value > 180)
-                value = -180 + (value - 180);
-            else if(value < -180)
-                value = 180 - (value - 180);
-
-            return value;
-        }
-
-        float ClampMaxSpeed(float value)
-        {
-            return MathHelper.Clamp(value, -MAX_SPEED, MAX_SPEED);
-        }
-
         bool RotateCamera(float pitchMod, float yawMod, float rollMod, bool forceRecalculate = false)
         {
-            IMyCameraBlock camera = (IMyCameraBlock)Entity;
+            IMyCameraBlock camera = (IMyCameraBlock)Block;
             float angleLimit = camera.RaycastConeLimit;
 
-            pitchMod = ClampMaxSpeed(pitchMod);
-            yawMod = ClampMaxSpeed(yawMod);
-            rollMod = ClampMaxSpeed(rollMod);
+            pitchMod = MathHelper.Clamp(pitchMod, -RotationMaxSpeed, RotationMaxSpeed);
+            yawMod = MathHelper.Clamp(yawMod, -RotationMaxSpeed, RotationMaxSpeed);
+            rollMod = MathHelper.Clamp(rollMod, -RotationMaxSpeed, RotationMaxSpeed);
 
-            float setPitch = ClampAngle(currentPitch - pitchMod, angleLimit);
-            float setYaw = ClampAngle(currentYaw - yawMod, angleLimit);
-            float setRoll = ClampAngle(currentRoll - rollMod);
+            float setPitch = ClampAngle(CurrentPitch - pitchMod, angleLimit);
+            float setYaw = ClampAngle(CurrentYaw - yawMod, angleLimit);
+            float setRoll = ClampAngle(CurrentRoll - rollMod);
 
-            if(forceRecalculate || Math.Abs(setPitch - currentPitch) >= EPSILON || Math.Abs(setYaw - currentYaw) >= EPSILON || Math.Abs(setRoll - currentRoll) >= EPSILON)
+            if(forceRecalculate || Math.Abs(setPitch - CurrentPitch) >= Epsilon || Math.Abs(setYaw - CurrentYaw) >= Epsilon || Math.Abs(setRoll - CurrentRoll) >= Epsilon)
             {
-                currentSpeed = new Vector3(pitchMod, yawMod, rollMod).Length();
-                currentPitch = setPitch;
-                currentYaw = setYaw;
-                currentRoll = setRoll;
+                CurrentSpeed = new Vector3(pitchMod, yawMod, rollMod).Length();
+                CurrentPitch = setPitch;
+                CurrentYaw = setYaw;
+                CurrentRoll = setRoll;
 
-                Matrix roll = MatrixD.CreateFromYawPitchRoll(0, 0, MathHelper.ToRadians(currentRoll));
-                Matrix yawAndPitch = MatrixD.CreateFromYawPitchRoll(MathHelper.ToRadians(currentYaw), MathHelper.ToRadians(currentPitch), 0);
+                Matrix roll = MatrixD.CreateFromYawPitchRoll(0, 0, MathHelper.ToRadians(CurrentRoll));
+                Matrix yawAndPitch = MatrixD.CreateFromYawPitchRoll(MathHelper.ToRadians(CurrentYaw), MathHelper.ToRadians(CurrentPitch), 0);
 
                 Matrix rotated = yawAndPitch * roll * OriginalMatrix;
 
@@ -415,10 +381,10 @@ namespace Digi.CameraPanning
                 rotated.Translation += CustomOffset;
 
                 RotatedMatrix = rotated;
-                Entity.SetLocalMatrix(rotated);
+                Block.PositionComp.SetLocalMatrix(ref rotated);
 
-                if(soundRotateEmitter != null && !soundRotateEmitter.IsPlaying)
-                    soundRotateEmitter.PlaySound(SOUND_ROTATE_PAIR, stopPrevious: true, skipIntro: true, alwaysHearOnRealistic: true, force2D: true);
+                if(!forceRecalculate && SoundRotateEmitter != null && !SoundRotateEmitter.IsPlaying)
+                    SoundRotateEmitter.PlaySound(RotateSound, stopPrevious: true, skipIntro: true, alwaysHearOnRealistic: true, force2D: true);
 
                 return true;
             }
@@ -429,10 +395,10 @@ namespace Digi.CameraPanning
         void TryFixCameraPosition()
         {
             // ignore mods and blocks that use ModelOffset
-            if(blockDef?.Context == null || !blockDef.Context.IsBaseGame || blockDef.ModelOffset.LengthSquared() > EPSILON)
+            if(BlockDef?.Context == null || !BlockDef.Context.IsBaseGame || BlockDef.ModelOffset.LengthSquared() > Epsilon)
                 return;
 
-            IMyCubeBlock b = (IMyCubeBlock)block;
+            IMyCubeBlock b = (IMyCubeBlock)Block;
             Dictionary<string, IMyModelDummy> dummies = new Dictionary<string, IMyModelDummy>();
             b.Model.GetDummies(dummies);
 
@@ -446,8 +412,33 @@ namespace Digi.CameraPanning
                 }
             }
 
-            CustomOffset = OriginalMatrix.Backward * ((block.CubeGrid.GridSize / 2f) - 0.05f);
-            RotatedMatrix.Translation += CustomOffset;
+            CustomOffset = OriginalMatrix.Backward * ((Block.CubeGrid.GridSize / 2f) - 0.05f);
+        }
+
+        static void Notify(string text, int aliveTimeMs)
+        {
+            IMyHudNotification notification = CameraPanningMod.Instance.Notification;
+
+            if(notification == null)
+                notification = CameraPanningMod.Instance.Notification = MyAPIGateway.Utilities.CreateNotification("");
+
+            notification.Hide(); // required since SE v1.194
+            notification.AliveTime = aliveTimeMs;
+            notification.Text = text;
+            notification.Show();
+        }
+
+        static float ClampAngle(float value, float limit = 0)
+        {
+            if(limit > 0)
+                value = MathHelper.Clamp(value, -limit, limit);
+
+            if(value > 180)
+                value = -180 + (value - 180);
+            else if(value < -180)
+                value = 180 - (value - 180);
+
+            return value;
         }
 
         static string GetControlAssignedName(IMyControl control)

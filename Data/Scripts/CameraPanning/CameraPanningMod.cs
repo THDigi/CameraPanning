@@ -101,11 +101,30 @@ namespace Digi.CameraPanning
             }
         }
 
+        CameraBlock PrevCamera;
+
         public override void HandleInput()
         {
             try
             {
-                if(MyAPIGateway.Utilities.IsDedicated || MyAPIGateway.Gui.IsCursorVisible || MyAPIGateway.Gui.ChatEntryVisible)
+                if(MyAPIGateway.Utilities.IsDedicated)
+                    return;
+
+                CameraBlock cameraBlock = (MyAPIGateway.Session?.CameraController as IMyCameraBlock)?.GameLogic?.GetAs<CameraBlock>();
+
+                if(cameraBlock != PrevCamera)
+                {
+                    PrevCamera?.Client?.ExitView();
+                    PrevCamera = null;
+
+                    cameraBlock?.Client?.EnterView();
+
+                    PrevCamera = cameraBlock;
+                }
+
+                cameraBlock?.Client?.Update();
+
+                if(MyAPIGateway.Gui.IsCursorVisible || MyAPIGateway.Gui.ChatEntryVisible)
                     return;
 
                 HandleCameraZoom();
@@ -121,20 +140,7 @@ namespace Digi.CameraPanning
         {
             IMyCameraBlock cameraBlock = MyAPIGateway.Session?.CameraController as IMyCameraBlock;
             CameraBlock logic = cameraBlock?.GameLogic?.GetAs<CameraBlock>();
-
-            if(logic != null && logic.IsValid)
-            {
-                int scroll = MyAPIGateway.Input.DeltaMouseScrollWheelValue();
-
-                if(scroll > 0)
-                {
-                    logic.ZoomIn();
-                }
-                else if(scroll < 0)
-                {
-                    logic.ZoomOut();
-                }
-            }
+            logic?.HandleZoom();
         }
 
         void HandleResetFirstPersonView()
