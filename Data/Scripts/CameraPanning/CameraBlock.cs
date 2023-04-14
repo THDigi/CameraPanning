@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Definitions;
 using Sandbox.Game;
@@ -17,43 +18,43 @@ namespace Digi.CameraPanning
     [MyEntityComponentDescriptor(typeof(MyObjectBuilder_CameraBlock), useEntityUpdate: false)]
     public class CameraBlock : MyGameLogicComponent
     {
-        private MyCubeBlock block;
-        private bool controlling = false;
-        private bool recenter = false;
+        MyCubeBlock block;
+        bool controlling = false;
+        bool recenter = false;
 
-        private Matrix originalMatrix;
-        private Matrix rotatedMatrix;
-        private Vector3 positionOffset;
+        Matrix OriginalMatrix;
+        Matrix RotatedMatrix;
+        Vector3 CustomOffset;
+        Vector3 OriginalWorldOffsetAsLocal;
 
-        private float currentPitch = 0;
-        private float currentYaw = 0;
-        private float currentRoll = 0;
-        private float currentSpeed = 0;
+        float currentPitch = 0;
+        float currentYaw = 0;
+        float currentRoll = 0;
+        float currentSpeed = 0;
 
-        private byte soundRotateStopDelay = 0;
-        private byte soundZoomStopDelay = 0;
-        private MyEntity3DSoundEmitter soundRotateEmitter = null;
-        private MyEntity3DSoundEmitter soundZoomEmitter = null;
+        int soundRotateStopDelay = 0;
+        int soundZoomStopDelay = 0;
+        MyEntity3DSoundEmitter soundRotateEmitter = null;
+        MyEntity3DSoundEmitter soundZoomEmitter = null;
 
-        private int prevFOV = 0;
-        private int ignoreFovChangeForTicks = 0;
+        int prevFOV = 0;
+        int ignoreFovChangeForTicks = 0;
 
-        private float zoomWidth;
-        private ZoomLimits zoomLimits;
-        private MyCameraBlockDefinition blockDef;
+        float zoomWidth;
+        ZoomLimits zoomLimits;
+        MyCameraBlockDefinition blockDef;
 
-        private IMyHudNotification Notification => CameraPanningMod.Instance.Notification;
+        IMyHudNotification Notification => CameraPanningMod.Instance.Notification;
 
-        private const float SPEED_MUL = 0.1f; // rotation input multiplier as it is too fast raw compared to the rest of the game
-        private const float MAX_SPEED = 1.8f; // using a max speed to feel like it's on actual servos
-        private const float ZOOM_DISTANCE = 1; // just for math to make sense, don't edit
-        private const byte SOUND_ROTATE_STOP_DELAY = 10; // game ticks
-        private const byte SOUND_ZOOM_STOP_DELAY = 30; // game ticks
-        private const float SOUND_ROTATE_VOLUME = 0.5f;
-        private const float SOUND_ZOOM_VOLUME = 0.2f;
-        private static readonly MySoundPair SOUND_ROTATE_PAIR = new MySoundPair("BlockRotor"); // sound pair used for camera rotation, without the 'Arc' or 'Real' prefix.
-        private static readonly MySoundPair SOUND_ZOOM_PAIR = new MySoundPair("WepShipGatlingRotation"); // sound pair used for camera zooming, without the 'Arc' or 'Real' prefix.
-        private const float EPSILON = 0.0001f;
+        const float SPEED_MUL = 0.1f; // rotation input multiplier as it is too fast raw compared to the rest of the game
+        const float MAX_SPEED = 2f; // using a max speed to feel like it's on actual servos
+        const float ZOOM_DISTANCE = 1; // just for math to make sense, don't edit
+        const int SOUND_ZOOM_STOP_DELAY = 30; // game ticks
+        const float SOUND_ROTATE_VOLUME = 1.0f;
+        const float SOUND_ZOOM_VOLUME = 0.35f;
+        static readonly MySoundPair SOUND_ROTATE_PAIR = new MySoundPair("ArcBlockRotor");
+        static readonly MySoundPair SOUND_ZOOM_PAIR = new MySoundPair("ArcWepShipGatlingRotation");
+        const float EPSILON = 0.0001f;
 
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
@@ -90,8 +91,11 @@ namespace Digi.CameraPanning
 
                 zoomWidth = FovToWidth(MathHelper.ToRadians(60));
 
-                originalMatrix = Entity.LocalMatrix;
-                rotatedMatrix = originalMatrix;
+                OriginalMatrix = Entity.LocalMatrix;
+                RotatedMatrix = OriginalMatrix;
+
+                Vector3D worldViewPosition = MatrixD.Invert(block.GetViewMatrix()).Translation;
+                OriginalWorldOffsetAsLocal = Vector3D.Transform(worldViewPosition, MatrixD.Invert(block.WorldMatrix)); // to local
 
                 // HACK temporary fix for camera being in the center of the block
                 TryFixCameraPosition(); // moves the camera view's position towards the default mount point by gridSize/2.
@@ -150,11 +154,11 @@ namespace Digi.CameraPanning
             UpdateZoom();
         }
 
-        private void UpdateZoom()
+        void UpdateZoom()
         {
             zoomWidth = MathHelper.Clamp(zoomWidth, zoomLimits.MinWidth, zoomLimits.MaxWidth);
 
-            var fov = WidthToFov(zoomWidth);
+            float fov = WidthToFov(zoomWidth);
             blockDef.MinFov = fov;
             blockDef.MaxFov = fov;
         }
@@ -195,7 +199,7 @@ namespace Digi.CameraPanning
             }
         }
 
-        private bool Update()
+        bool Update()
         {
             if(MyAPIGateway.Session.CameraController != Entity)
             {
@@ -205,7 +209,7 @@ namespace Digi.CameraPanning
                     Notification.Hide();
 
                     //Entity.Render.Visible = true; // restore camera model
-                    Entity.SetLocalMatrix(originalMatrix); // reset the camera's matrix to avoid seeing its model skewed if the model gets updated with the local matrix
+                    Entity.SetLocalMatrix(OriginalMatrix); // reset the camera's matrix to avoid seeing its model skewed if the model gets updated with the local matrix
                     Entity.Render.UpdateRenderObject(true); // force model to be recalculated to avoid invisible models on merge/unmerge while camera is viewed
 
                     // reset definition on exit camera for allowing mods to read proper values
@@ -241,10 +245,10 @@ namespace Digi.CameraPanning
                 // but disabled to allow mods to model things in view with their camera model.
                 //Entity.Render.Visible = false;
 
-                originalMatrix = Entity.LocalMatrix; // recalculate original matrix and rotated matrix in case the block was "moved" (by merge or who knows what else)
+                OriginalMatrix = Entity.LocalMatrix; // recalculate original matrix and rotated matrix in case the block was "moved" (by merge or who knows what else)
                 RotateCamera(0, 0, 0, true);
 
-                Entity.SetLocalMatrix(rotatedMatrix); // restore the last view matrix
+                Entity.SetLocalMatrix(RotatedMatrix); // restore the last view matrix
 
                 prevFOV = FOV;
                 zoomWidth = FovToWidth(FovRad);
@@ -337,7 +341,7 @@ namespace Digi.CameraPanning
                     currentPitch = 0;
                     currentYaw = 0;
                     currentRoll = 0;
-                    Entity.SetLocalMatrix(rotatedMatrix);
+                    Entity.SetLocalMatrix(RotatedMatrix);
                     return true;
                 }
             }
@@ -345,7 +349,7 @@ namespace Digi.CameraPanning
             return false;
         }
 
-        private void Notify(string text, int aliveTimeMs)
+        void Notify(string text, int aliveTimeMs)
         {
             var notification = CameraPanningMod.Instance.Notification;
 
@@ -358,7 +362,7 @@ namespace Digi.CameraPanning
             notification.Show();
         }
 
-        private float ClampAngle(float value, float limit = 0)
+        float ClampAngle(float value, float limit = 0)
         {
             if(limit > 0)
                 value = MathHelper.Clamp(value, -limit, limit);
@@ -371,23 +375,23 @@ namespace Digi.CameraPanning
             return value;
         }
 
-        private float ClampMaxSpeed(float value)
+        float ClampMaxSpeed(float value)
         {
             return MathHelper.Clamp(value, -MAX_SPEED, MAX_SPEED);
         }
 
-        private bool RotateCamera(float pitchMod, float yawMod, float rollMod, bool forceRecalculate = false)
+        bool RotateCamera(float pitchMod, float yawMod, float rollMod, bool forceRecalculate = false)
         {
-            var camera = (IMyCameraBlock)Entity;
+            IMyCameraBlock camera = (IMyCameraBlock)Entity;
             float angleLimit = camera.RaycastConeLimit;
 
             pitchMod = ClampMaxSpeed(pitchMod);
             yawMod = ClampMaxSpeed(yawMod);
             rollMod = ClampMaxSpeed(rollMod);
 
-            var setPitch = ClampAngle(currentPitch - pitchMod, angleLimit);
-            var setYaw = ClampAngle(currentYaw - yawMod, angleLimit);
-            var setRoll = ClampAngle(currentRoll - rollMod);
+            float setPitch = ClampAngle(currentPitch - pitchMod, angleLimit);
+            float setYaw = ClampAngle(currentYaw - yawMod, angleLimit);
+            float setRoll = ClampAngle(currentRoll - rollMod);
 
             if(forceRecalculate || Math.Abs(setPitch - currentPitch) >= EPSILON || Math.Abs(setYaw - currentYaw) >= EPSILON || Math.Abs(setRoll - currentRoll) >= EPSILON)
             {
@@ -396,10 +400,22 @@ namespace Digi.CameraPanning
                 currentYaw = setYaw;
                 currentRoll = setRoll;
 
-                rotatedMatrix = MatrixD.CreateFromYawPitchRoll(0, 0, MathHelper.ToRadians(currentRoll)) * originalMatrix;
-                rotatedMatrix = MatrixD.CreateFromYawPitchRoll(MathHelper.ToRadians(currentYaw), MathHelper.ToRadians(currentPitch), 0) * rotatedMatrix;
-                rotatedMatrix.Translation = originalMatrix.Translation + positionOffset;
-                Entity.SetLocalMatrix(rotatedMatrix);
+                Matrix roll = MatrixD.CreateFromYawPitchRoll(0, 0, MathHelper.ToRadians(currentRoll));
+                Matrix yawAndPitch = MatrixD.CreateFromYawPitchRoll(MathHelper.ToRadians(currentYaw), MathHelper.ToRadians(currentPitch), 0);
+
+                Matrix rotated = yawAndPitch * roll * OriginalMatrix;
+
+                // counter-shift the position so that it stays off-center where it needs to be
+                Vector3 rotatedOffset = Vector3.TransformNormal(OriginalWorldOffsetAsLocal, rotated);
+                Vector3 originalOffset = Vector3.TransformNormal(OriginalWorldOffsetAsLocal, OriginalMatrix);
+                Vector3 dir = originalOffset - rotatedOffset;
+
+                rotated.Translation += dir;
+
+                rotated.Translation += CustomOffset;
+
+                RotatedMatrix = rotated;
+                Entity.SetLocalMatrix(rotated);
 
                 if(soundRotateEmitter != null && !soundRotateEmitter.IsPlaying)
                     soundRotateEmitter.PlaySound(SOUND_ROTATE_PAIR, stopPrevious: true, skipIntro: true, alwaysHearOnRealistic: true, force2D: true);
@@ -410,33 +426,33 @@ namespace Digi.CameraPanning
             return false;
         }
 
-        private void TryFixCameraPosition()
+        void TryFixCameraPosition()
         {
             // ignore mods and blocks that use ModelOffset
+            if(blockDef?.Context == null || !blockDef.Context.IsBaseGame || blockDef.ModelOffset.LengthSquared() > EPSILON)
+                return;
 
-            var block = (MyCubeBlock)Entity;
-            if(block.BlockDefinition.Context.IsBaseGame && block.BlockDefinition.ModelOffset.LengthSquared() <= EPSILON)
+            IMyCubeBlock b = (IMyCubeBlock)block;
+            Dictionary<string, IMyModelDummy> dummies = new Dictionary<string, IMyModelDummy>();
+            b.Model.GetDummies(dummies);
+
+            foreach(IMyModelDummy dummy in dummies.Values)
             {
-                Vector3 offsetDir = Vector3.Backward;
-                //var mountPoints = block.BlockDefinition.MountPoints;
-                //for(int i = 0; i < mountPoints.Length; i++)
-                //{
-                //    var mount = mountPoints[i];
-                //    if(mount.Enabled && mount.Default)
-                //    {
-                //        offsetDir = (Vector3)mount.Normal;
-                //        break;
-                //    }
-                //}
-
-                positionOffset = Vector3.TransformNormal(offsetDir, originalMatrix) * ((block.CubeGrid.GridSize / 2f) - 0.05f);
-                rotatedMatrix.Translation = originalMatrix.Translation + positionOffset;
+                // MyCameraBlock.GetViewMatrix()
+                if(dummy.Name == MyCameraBlock.DUMMY_NAME_POSITION)
+                {
+                    // has custom position, don't offset it.
+                    return;
+                }
             }
+
+            CustomOffset = OriginalMatrix.Backward * ((block.CubeGrid.GridSize / 2f) - 0.05f);
+            RotatedMatrix.Translation += CustomOffset;
         }
 
-        private static string GetControlAssignedName(IMyControl control)
+        static string GetControlAssignedName(IMyControl control)
         {
-            var assign = control.GetControlButtonName(MyGuiInputDeviceEnum.Mouse);
+            string assign = control.GetControlButtonName(MyGuiInputDeviceEnum.Mouse);
 
             if(!string.IsNullOrWhiteSpace(assign))
                 return assign;
