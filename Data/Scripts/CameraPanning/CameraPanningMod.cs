@@ -18,12 +18,9 @@ namespace Digi.CameraPanning
         public IMyHudNotification Notification;
         public Dictionary<MyDefinitionId, ZoomLimits> WidthLimits;
 
-        private float OriginalCameraFovSmall = 0;
-        private float OriginalCameraFovLarge = 0;
+        Dictionary<MyCameraBlockDefinition, float> OriginalDefData;
 
-        public const float CAMERA_NEW_MAX_FOV = (float)(100 / 180d * Math.PI); // 100 degrees in radians
-        public readonly MyDefinitionId CAMERA_SMALL_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "SmallCameraBlock");
-        public readonly MyDefinitionId CAMERA_LARGE_ID = new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "LargeCameraBlock");
+        public const float CameraNewMaxFOV = (float)(100 / 180d * Math.PI); // 100 degrees in radians
 
         public override void LoadData()
         {
@@ -38,7 +35,13 @@ namespace Digi.CameraPanning
             {
                 if(!MyAPIGateway.Utilities.IsDedicated)
                 {
-                    EditVanillaMaxFov();
+                    OriginalDefData = new Dictionary<MyCameraBlockDefinition, float>();
+
+                    EditCamera(new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "SmallCameraBlock"));
+                    EditCamera(new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "LargeCameraBlock"));
+                    EditCamera(new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "SmallCameraTopMounted"));
+                    EditCamera(new MyDefinitionId(typeof(MyObjectBuilder_CameraBlock), "LargeCameraTopMounted"));
+
                     StoreFovLimits();
                 }
             }
@@ -48,33 +51,49 @@ namespace Digi.CameraPanning
             }
         }
 
-        private void EditVanillaMaxFov()
+        protected override void UnloadData()
         {
-            var def = GetCameraDefinition(CAMERA_SMALL_ID);
-
-            if(def != null)
+            try
             {
-                OriginalCameraFovSmall = def.MaxFov;
-                def.MaxFov = CAMERA_NEW_MAX_FOV;
+                if(OriginalDefData != null)
+                {
+                    // restore original FOV for camera definitions as they are not reloaded in between world loads which means removing the mod will not reset the FOV.
+                    foreach(KeyValuePair<MyCameraBlockDefinition, float> kv in OriginalDefData)
+                    {
+                        kv.Key.MaxFov = kv.Value;
+                    }
+                }
+            }
+            catch(Exception e)
+            {
+                Log.Error(e);
             }
 
-            def = GetCameraDefinition(CAMERA_LARGE_ID);
+            Instance = null;
+            Log.Close();
+        }
 
-            if(def != null)
+        void EditCamera(MyDefinitionId defId)
+        {
+            MyCubeBlockDefinition blockDef;
+            if(!MyDefinitionManager.Static.TryGetCubeBlockDefinition(defId, out blockDef))
+                return;
+
+            MyCameraBlockDefinition camDef = blockDef as MyCameraBlockDefinition;
+            if(camDef != null)
             {
-                OriginalCameraFovLarge = def.MaxFov;
-                def.MaxFov = CAMERA_NEW_MAX_FOV;
+                OriginalDefData[camDef] = camDef.MaxFov;
+                camDef.MaxFov = CameraNewMaxFOV;
             }
         }
 
-        private void StoreFovLimits()
+        void StoreFovLimits()
         {
             WidthLimits = new Dictionary<MyDefinitionId, ZoomLimits>(MyDefinitionId.Comparer);
 
-            foreach(var def in MyDefinitionManager.Static.GetAllDefinitions())
+            foreach(MyDefinitionBase def in MyDefinitionManager.Static.GetAllDefinitions())
             {
-                var camDef = def as MyCameraBlockDefinition;
-
+                MyCameraBlockDefinition camDef = def as MyCameraBlockDefinition;
                 if(camDef != null)
                 {
                     WidthLimits[def.Id] = new ZoomLimits(camDef.MinFov, camDef.MaxFov);
@@ -98,10 +117,10 @@ namespace Digi.CameraPanning
             }
         }
 
-        private void HandleCameraZoom()
+        void HandleCameraZoom()
         {
-            var cameraBlock = MyAPIGateway.Session?.CameraController as IMyCameraBlock;
-            var logic = cameraBlock?.GameLogic?.GetAs<CameraBlock>();
+            IMyCameraBlock cameraBlock = MyAPIGateway.Session?.CameraController as IMyCameraBlock;
+            CameraBlock logic = cameraBlock?.GameLogic?.GetAs<CameraBlock>();
 
             if(logic != null && logic.IsValid)
             {
@@ -118,7 +137,7 @@ namespace Digi.CameraPanning
             }
         }
 
-        private void HandleResetFirstPersonView()
+        void HandleResetFirstPersonView()
         {
             // Reset view when forced in first person by pressing the camera key
             if(MyAPIGateway.Input.IsNewGameControlPressed(MyControlsSpace.CAMERA_MODE))
@@ -134,7 +153,7 @@ namespace Digi.CameraPanning
                     if(controller is IMyShipController)
                     {
                         // HACK this is how MyCockpit.Rotate() does things so I kinda have to use these magic numbers.
-                        var num = MyAPIGateway.Input.GetMouseSensitivity() * 0.13f;
+                        float num = MyAPIGateway.Input.GetMouseSensitivity() * 0.13f;
                         camCtrl.Rotate(new Vector2(controller.HeadLocalXAngle / num, controller.HeadLocalYAngle / num), 0);
                     }
                     else
@@ -144,43 +163,6 @@ namespace Digi.CameraPanning
                     }
                 }
             }
-        }
-
-        protected override void UnloadData()
-        {
-            try
-            {
-                if(!MyAPIGateway.Utilities.IsDedicated)
-                {
-                    // restore original FOV for camera definitions as they are not reloaded in between world loads which means removing the mod will not reset the FOV.
-                    var def = GetCameraDefinition(CAMERA_SMALL_ID);
-
-                    if(def != null)
-                        def.MaxFov = OriginalCameraFovSmall;
-
-                    def = GetCameraDefinition(CAMERA_LARGE_ID);
-
-                    if(def != null)
-                        def.MaxFov = OriginalCameraFovLarge;
-                }
-            }
-            catch(Exception e)
-            {
-                Log.Error(e);
-            }
-
-            Instance = null;
-            Log.Close();
-        }
-
-        private MyCameraBlockDefinition GetCameraDefinition(MyDefinitionId defId)
-        {
-            MyCubeBlockDefinition def;
-
-            if(MyDefinitionManager.Static.TryGetCubeBlockDefinition(defId, out def))
-                return def as MyCameraBlockDefinition;
-
-            return null;
         }
     }
 }
