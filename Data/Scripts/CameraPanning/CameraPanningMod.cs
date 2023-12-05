@@ -127,20 +127,13 @@ namespace Digi.CameraPanning
                 if(MyAPIGateway.Gui.IsCursorVisible || MyAPIGateway.Gui.ChatEntryVisible)
                     return;
 
-                HandleCameraZoom();
+                cameraBlock?.HandleZoom();
                 HandleResetFirstPersonView();
             }
             catch(Exception e)
             {
                 Log.Error(e);
             }
-        }
-
-        void HandleCameraZoom()
-        {
-            IMyCameraBlock cameraBlock = MyAPIGateway.Session?.CameraController as IMyCameraBlock;
-            CameraBlock logic = cameraBlock?.GameLogic?.GetAs<CameraBlock>();
-            logic?.HandleZoom();
         }
 
         void HandleResetFirstPersonView()

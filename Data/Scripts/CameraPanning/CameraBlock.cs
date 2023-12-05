@@ -180,7 +180,7 @@ namespace Digi.CameraPanning
         public void Update()
         {
             //if(!IsValid)
-            if(!(Block != null && Block.CubeGrid.Physics.Enabled))
+            if(!(Block?.CubeGrid?.Physics?.Enabled ?? false))
                 return;
 
             bool rotating = UpdateCamera(); // returns true if the camera is rotating, false otherwise
@@ -235,8 +235,8 @@ namespace Digi.CameraPanning
             BlockDef.MinFov = ZoomLimits.MinFov;
             BlockDef.MaxFov = ZoomLimits.MaxFov;
 
-            if(SoundZoomEmitter != null)
-                SoundZoomEmitter.StopSound(true);
+            SoundRotateEmitter?.StopSound(true);
+            SoundZoomEmitter?.StopSound(true);
         }
 
         bool UpdateCamera()
