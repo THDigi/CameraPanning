@@ -6,6 +6,7 @@ using Sandbox.Game;
 using Sandbox.Game.Entities;
 using Sandbox.ModAPI;
 using VRage.Game.Components;
+using VRage.Game.Entity;
 using VRage.Game.ModAPI;
 using VRage.Input;
 using VRage.ModAPI;
@@ -68,7 +69,6 @@ namespace Digi.CameraPanning
                 return;
 
             int scroll = MyAPIGateway.Input.DeltaMouseScrollWheelValue();
-
             if(scroll > 0)
             {
                 Client.ZoomIn();
@@ -135,11 +135,8 @@ namespace Digi.CameraPanning
             OriginalMatrix = Block.PositionComp.LocalMatrixRef;
             RotatedMatrix = OriginalMatrix;
 
-            Vector3D worldViewPosition = MatrixD.Invert(Block.GetViewMatrix()).Translation;
-            OriginalWorldOffsetAsLocal = Vector3D.Transform(worldViewPosition, MatrixD.Invert(Block.WorldMatrix)); // to local
-
-            // HACK temporary fix for camera being in the center of the block
-            TryFixCameraPosition(); // moves the camera view's position towards the default mount point by gridSize/2.
+            Block.OnModelRefresh += ModelChanged;
+            ModelChanged(Block);
 
             SoundRotateEmitter = new MyEntity3DSoundEmitter(Block);
             SoundRotateEmitter.CustomVolume = RotateSoundVolume;
@@ -150,11 +147,11 @@ namespace Digi.CameraPanning
 
         public void Close()
         {
-            if(SoundRotateEmitter != null)
-                SoundRotateEmitter.StopSound(true, true);
+            if(Block != null)
+                Block.OnModelRefresh -= ModelChanged;
 
-            if(SoundZoomEmitter != null)
-                SoundZoomEmitter.StopSound(true, true);
+            SoundRotateEmitter?.StopSound(true, true);
+            SoundZoomEmitter?.StopSound(true, true);
         }
 
         public bool IsValid => (Block != null && Block.CubeGrid.Physics.Enabled);
@@ -392,8 +389,26 @@ namespace Digi.CameraPanning
             return false;
         }
 
+        void ModelChanged(MyEntity ent)
+        {
+            if(Block.IsBuilt)
+            {
+                Vector3D worldViewPosition = MatrixD.Invert(Block.GetViewMatrix()).Translation;
+                OriginalWorldOffsetAsLocal = Vector3D.Transform(worldViewPosition, MatrixD.Invert(Block.WorldMatrix)); // to local
+            }
+
+            TryFixCameraPosition();
+        }
+
+        // HACK Move vanilla camera view towards the back wall if it doesn't have the camera dummy
         void TryFixCameraPosition()
         {
+            CustomOffset = Vector3.Zero;
+
+            // ignore construction stages
+            if(!Block.IsBuilt)
+                return;
+
             // ignore mods and blocks that use ModelOffset
             if(BlockDef?.Context == null || !BlockDef.Context.IsBaseGame || BlockDef.ModelOffset.LengthSquared() > Epsilon)
                 return;
@@ -407,7 +422,7 @@ namespace Digi.CameraPanning
                 // MyCameraBlock.GetViewMatrix()
                 if(dummy.Name == MyCameraBlock.DUMMY_NAME_POSITION)
                 {
-                    // has custom position, don't offset it.
+                    // has custom camera dummy that sets position, don't offset it.
                     return;
                 }
             }
